@@ -12,6 +12,7 @@ import uuid
 import pandas as pd
 import numpy as np
 
+
 class Game:
     def __init__(self, env: ChessEnv, white: Agent, black: Agent):
         """
@@ -31,8 +32,7 @@ class Game:
 
     @staticmethod
     def get_winner(result: str) -> int:
-        return 1 if result == "1-0" else - 1 if result == "0-1" else 0
-
+        return 1 if result == "1-0" else -1 if result == "0-1" else 0
 
     @utils.time_function
     def play_one_game(self, stochastic: bool = True) -> int:
@@ -51,20 +51,21 @@ class Game:
         counter, previous_edges, full_game = 0, (None, None), True
         while not self.env.board.is_game_over():
             # play one move (previous move is used for updating the MCTS tree)
-            previous_edges = self.play_move(stochastic=stochastic, previous_moves=previous_edges)
+            previous_edges = self.play_move(
+                stochastic=stochastic, previous_moves=previous_edges
+            )
             logging.info(f"\n{self.env.board}")
             logging.info(f"Value according to white: {self.white.mcts.root.value}")
             logging.info(f"Value according to black: {self.black.mcts.root.value}")
-            if os.environ.get("SELFPLAY_SHOW_BOARD") == "true":
-                self.GUI.gameboard.board.set_fen(self.env.board.fen()) 
-                self.GUI.draw()
 
             # end if the game drags on too long
             counter += 1
             if counter > config.MAX_GAME_MOVES or self.env.board.is_repetition(3):
                 # estimate the winner based on piece values
                 winner = ChessEnv.estimate_winner(self.env.board)
-                logging.info(f"Game over by move limit ({config.MAX_GAME_MOVES}). Result: {winner}")
+                logging.info(
+                    f"Game over by move limit ({config.MAX_GAME_MOVES}). Result: {winner}"
+                )
                 full_game = False
                 break
         if full_game:
@@ -90,7 +91,12 @@ class Game:
 
         return winner
 
-    def play_move(self, stochastic: bool = True, previous_moves: tuple[Edge, Edge] = (None, None), save_moves=True) -> None:
+    def play_move(
+        self,
+        stochastic: bool = True,
+        previous_moves: tuple[Edge, Edge] = (None, None),
+        save_moves=True,
+    ) -> None:
         """
         Play one move. If stochastic is True, the move is chosen using a probability distribution.
         Otherwise, the move is chosen based on the highest N (deterministically).
@@ -102,16 +108,24 @@ class Game:
 
         if previous_moves[0] is None or previous_moves[1] is None:
             # create new tree with root node == current board
-            current_player.mcts = MCTS(current_player, state=self.env.board.fen(), stochastic=stochastic)
+            current_player.mcts = MCTS(
+                current_player, state=self.env.board.fen(), stochastic=stochastic
+            )
         else:
             # change the root node to the node after playing the two previous moves
             try:
-                node = current_player.mcts.root.get_edge(previous_moves[0].action).output_node
+                node = current_player.mcts.root.get_edge(
+                    previous_moves[0].action
+                ).output_node
                 node = node.get_edge(previous_moves[1].action).output_node
                 current_player.mcts.root = node
             except AttributeError:
-                logging.warning("WARN: Node does not exist in tree, continuing with new tree...")
-                current_player.mcts = MCTS(current_player, state=self.env.board.fen(), stochastic=stochastic)
+                logging.warning(
+                    "WARN: Node does not exist in tree, continuing with new tree..."
+                )
+                current_player.mcts = MCTS(
+                    current_player, state=self.env.board.fen(), stochastic=stochastic
+                )
         # play n simulations from the root node
         current_player.run_simulations(n=config.SIMULATIONS_PER_MOVE)
 
@@ -122,7 +136,7 @@ class Game:
 
         sum_move_visits = sum(e.N for e in moves)
         probs = [e.N / sum_move_visits for e in moves]
-        
+
         if stochastic:
             # choose a move based on a probability distribution
             best_move = np.random.choice(moves, p=probs)
@@ -132,9 +146,10 @@ class Game:
 
         # play the move
         logging.info(
-            f"{'White' if self.turn else 'Black'} played  {self.env.board.fullmove_number}. {best_move.action}")
+            f"{'White' if self.turn else 'Black'} played  {self.env.board.fullmove_number}. {best_move.action}"
+        )
         self.env.step(best_move.action)
-        
+
         # switch turn
         self.turn = not self.turn
 
@@ -147,8 +162,7 @@ class Game:
         """
         sum_move_visits = sum(e.N for e in moves)
         # create dictionary of moves and their probabilities
-        search_probabilities = {
-            e.action.uci(): e.N / sum_move_visits for e in moves}
+        search_probabilities = {e.action.uci(): e.N / sum_move_visits for e in moves}
         # winner gets added after game is over
         self.memory[-1].append((state, search_probabilities, None))
 
@@ -163,10 +177,8 @@ class Game:
             with open("full_games.txt", "a") as f:
                 f.write(f"{game_id}.npy\n")
         np.save(os.path.join(config.MEMORY_DIR, game_id), self.memory[-1])
-        logging.info(
-            f"Game saved to {os.path.join(config.MEMORY_DIR, game_id)}.npy")
+        logging.info(f"Game saved to {os.path.join(config.MEMORY_DIR, game_id)}.npy")
         logging.info(f"Memory size: {len(self.memory)}")
-
 
     @utils.time_function
     def train_puzzles(self, puzzles: pd.DataFrame):
@@ -188,7 +200,9 @@ class Game:
             counter, previous_edges = 0, (None, None)
             while not self.env.board.is_game_over():
                 # deterministically choose the next move (we want no exploration here)
-                previous_edges = self.play_move(stochastic=False, previous_moves=previous_edges)
+                previous_edges = self.play_move(
+                    stochastic=False, previous_moves=previous_edges
+                )
                 logging.info(f"\n{self.env.board}")
                 logging.info(f"Value according to white: {self.white.mcts.root.value}")
                 logging.info(f"Value according to black: {self.black.mcts.root.value}")
@@ -198,7 +212,9 @@ class Game:
                     break
             if not self.env.board.is_game_over():
                 continue
-            logging.info(f"Puzzle complete. Ended after {counter} moves: {self.env.board.result()}")
+            logging.info(
+                f"Puzzle complete. Ended after {counter} moves: {self.env.board.result()}"
+            )
             # save game result to memory for all games
             winner = Game.get_winner(self.env.board.result())
             for index, element in enumerate(self.memory[-1]):
@@ -234,5 +250,3 @@ class Game:
         puzzles = puzzles[puzzles["type"].str.contains(type)]
         logging.info(f"Created puzzles in {time.time() - start_time} seconds")
         return puzzles
-
-    
