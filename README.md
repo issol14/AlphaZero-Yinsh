@@ -1,3 +1,108 @@
+# AlphaZero Chess Training (Clean Implementation)
+
+This is a cleaned-up version of the AlphaZero chess implementation with GUI and server components removed, focusing purely on the training pipeline.
+
+## Overview
+
+This implementation provides a complete AlphaZero training pipeline for chess, including:
+
+- **Self-play data generation** - AI plays against itself to generate training data
+- **Neural network training** - Train policy and value networks simultaneously  
+- **Model evaluation** - Compare models through gameplay
+- **MCTS implementation** - Monte Carlo Tree Search with neural network guidance
+
+## Key Components Removed
+
+- ❌ GUI components (no visual interface)
+- ❌ Server/client architecture (no network serving)
+- ❌ Docker containers and deployment files
+- ❌ Interactive gameplay features
+
+## Key Components Retained
+
+- ✅ Core AlphaZero training loop
+- ✅ MCTS implementation (`mcts.py`, `node.py`, `edge.py`)
+- ✅ Neural network architecture (`rlmodelbuilder.py`)
+- ✅ Self-play data generation (`selfplay.py`)
+- ✅ Model training (`train.py`)
+- ✅ Model evaluation (`evaluate.py`)
+- ✅ Chess environment (`chessEnv.py`, `game.py`)
+
+## Usage
+
+### 1. Generate Training Data (Self-Play)
+```bash
+python code/selfplay.py --type selfplay
+```
+
+### 2. Train Neural Network
+```bash
+python code/train.py --model models/model.h5 --data-folder memory
+```
+
+### 3. Evaluate Models
+```bash
+python code/evaluate.py old_model.h5 new_model.h5 100
+```
+
+### 4. Solve Puzzles (Optional)
+```bash
+python code/selfplay.py --type puzzles --puzzle-file puzzles/lichess_db_puzzle.csv --puzzle-type mateIn1
+```
+
+## Directory Structure
+
+```
+code/
+├── Core Training Files
+│   ├── train.py           # Neural network training
+│   ├── selfplay.py        # Self-play data generation
+│   ├── evaluate.py        # Model evaluation
+│   └── config.py          # Configuration parameters
+│
+├── AI Components
+│   ├── agent.py           # AI agent with neural network
+│   ├── mcts.py            # Monte Carlo Tree Search
+│   ├── node.py            # MCTS tree nodes
+│   ├── edge.py            # MCTS tree edges
+│   └── rlmodelbuilder.py  # Neural network architecture
+│
+├── Game Environment
+│   ├── game.py            # Game logic and management
+│   ├── chessEnv.py        # Chess environment wrapper
+│   └── mapper.py          # Coordinate transformations
+│
+├── Utilities
+│   ├── utils.py           # Helper functions
+│   └── local_prediction.py # Optimized neural network inference
+│
+└── Data Storage
+    ├── memory/            # Training data (.npy files)
+    ├── models/            # Saved neural networks (.h5 files)
+    ├── plots/             # Training loss plots
+    ├── puzzles/           # Chess puzzle data
+    └── tests/             # Test results and visualizations
+```
+
+## Requirements
+
+- Python 3.7+
+- TensorFlow 2.x
+- python-chess
+- NumPy
+- Pandas
+- Matplotlib
+
+## Training Pipeline
+
+1. **Initialize** → Load or create neural network model
+2. **Self-Play** → Generate training data through self-play games
+3. **Training** → Train neural network on collected data
+4. **Evaluation** → Test new model against previous best
+5. **Iteration** → Repeat cycle to improve performance
+
+This clean implementation focuses on the core AlphaZero algorithm without the complexity of GUI or server components, making it ideal for research and experimentation.
+
 # Chess engine with Deep Reinforcement learning
 
 ***I'm currently rewriting the whole thing in C++, you can check it out [here](https://github.com/zjeffer/chess-deep-rl-cpp).***
@@ -195,63 +300,63 @@ Draws: 5
 
 * [1]"Deep reinforcement learning," Wikipedia. Jan. 29, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Deep_reinforcement_learning&oldid=1068657803
 
-* [2]“Reinforcement learning,” Wikipedia. Jan. 15, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Reinforcement_learning&oldid=1065862559
+* [2]"Reinforcement learning," Wikipedia. Jan. 15, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Reinforcement_learning&oldid=1065862559
 
-* [3]“AlphaZero,” Wikipedia. Jan. 15, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaZero&oldid=1065791194
+* [3]"AlphaZero," Wikipedia. Jan. 15, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaZero&oldid=1065791194
 
-* [4]“AlphaGo,” Wikipedia. Jan. 25, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaGo&oldid=1067772956
+* [4]"AlphaGo," Wikipedia. Jan. 25, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaGo&oldid=1067772956
 
-* [5]“AlphaGo Zero,” Wikipedia. Oct. 14, 2021. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaGo_Zero&oldid=1049954309
+* [5]"AlphaGo Zero," Wikipedia. Oct. 14, 2021. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=AlphaGo_Zero&oldid=1049954309
 
-* [6]“Monte Carlo tree search,” Wikipedia. Jan. 23, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Monte_Carlo_tree_search&oldid=1067396622
+* [6]"Monte Carlo tree search," Wikipedia. Jan. 23, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Monte_Carlo_tree_search&oldid=1067396622
 
-* [7]“Minimax,” Wikipedia. Jan. 18, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Minimax&oldid=1066446492
+* [7]"Minimax," Wikipedia. Jan. 18, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Minimax&oldid=1066446492
 
-* [8]“Alpha–beta pruning,” Wikipedia. Jan. 30, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Alpha%E2%80%93beta_pruning&oldid=1068746141
+* [8]"Alpha–beta pruning," Wikipedia. Jan. 30, 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://en.wikipedia.org/w/index.php?title=Alpha%E2%80%93beta_pruning&oldid=1068746141
 
-* [9]“python-chess: a chess library for Python — python-chess 1.8.0 documentation.” https://python-chess.readthedocs.io/en/latest/ (accessed Feb. 01, 2022).
+* [9]"python-chess: a chess library for Python — python-chess 1.8.0 documentation." https://python-chess.readthedocs.io/en/latest/ (accessed Feb. 01, 2022).
 
-* [10]“Technical Explanation of Leela Chess Zero · LeelaChessZero/lc0 Wiki,” GitHub. https://github.com/LeelaChessZero/lc0 (accessed Feb. 01, 2022).
+* [10]"Technical Explanation of Leela Chess Zero · LeelaChessZero/lc0 Wiki," GitHub. https://github.com/LeelaChessZero/lc0 (accessed Feb. 01, 2022).
 
 
 ### AlphaZero & AlphaGo Zero specific articles & papers
 
-* [11]D. Silver et al., “Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm,” arXiv:1712.01815 [cs], Dec. 2017, Accessed: Feb. 01, 2022. [Online]. Available: http://arxiv.org/abs/1712.01815
+* [11]D. Silver et al., "Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm," arXiv:1712.01815 [cs], Dec. 2017, Accessed: Feb. 01, 2022. [Online]. Available: http://arxiv.org/abs/1712.01815
 
-* [12]“A general reinforcement learning algorithm that masters chess, shogi, and Go through self-play.” https://www.science.org/doi/10.1126/science.aar6404 (accessed Feb. 01, 2022).
+* [12]"A general reinforcement learning algorithm that masters chess, shogi, and Go through self-play." https://www.science.org/doi/10.1126/science.aar6404 (accessed Feb. 01, 2022).
 
-* [13]“engines - Understanding AlphaZero,” Chess Stack Exchange. https://chess.stackexchange.com/questions/19353/understanding-alphazero (accessed Feb. 01, 2022).
+* [13]"engines - Understanding AlphaZero," Chess Stack Exchange. https://chess.stackexchange.com/questions/19353/understanding-alphazero (accessed Feb. 01, 2022).
 
-* [14]“How does AlphaZero learn to evaluate a position it has never seen?,” Chess Stack Exchange. https://chess.stackexchange.com/questions/19401/how-does-alphazero-learn-to-evaluate-a-position-it-has-never-seen (accessed Feb. 01, 2022).
+* [14]"How does AlphaZero learn to evaluate a position it has never seen?," Chess Stack Exchange. https://chess.stackexchange.com/questions/19401/how-does-alphazero-learn-to-evaluate-a-position-it-has-never-seen (accessed Feb. 01, 2022).
 
-* [15]“Figure 2: MCTS in AlphaGo Zero. | Nature”, Accessed: Feb. 01, 2022. [Online]. Available: https://www.nature.com/articles/nature24270/figures/2
+* [15]"Figure 2: MCTS in AlphaGo Zero. | Nature", Accessed: Feb. 01, 2022. [Online]. Available: https://www.nature.com/articles/nature24270/figures/2
 
-* [16]J. Varty, “Alpha Zero And Monte Carlo Tree Search.” https://joshvarty.github.io/AlphaZero/ (accessed Feb. 01, 2022).
+* [16]J. Varty, "Alpha Zero And Monte Carlo Tree Search." https://joshvarty.github.io/AlphaZero/ (accessed Feb. 01, 2022).
 
 * [17]J. Varty, AlphaZeroSimple. 2022. Accessed: Feb. 01, 2022. [Online]. Available: https://github.com/JoshVarty/AlphaZeroSimple
 
-* [18]“Was AlphaZero taught castling?,” Chess Stack Exchange. https://chess.stackexchange.com/questions/37468/was-alphazero-taught-castling (accessed Feb. 01, 2022).
+* [18]"Was AlphaZero taught castling?," Chess Stack Exchange. https://chess.stackexchange.com/questions/37468/was-alphazero-taught-castling (accessed Feb. 01, 2022).
 
-* [19]T. M. Blog, “A Single-Player Alpha Zero Implementation in 250 Lines of Python.” https://tmoer.github.io/AlphaZero/ (accessed Feb. 01, 2022).
+* [19]T. M. Blog, "A Single-Player Alpha Zero Implementation in 250 Lines of Python." https://tmoer.github.io/AlphaZero/ (accessed Feb. 01, 2022).
 
-* [20]“AlphaZero |.” https://sebastianbodenstein.net/post/alphazero/ (accessed Feb. 01, 2022).
+* [20]"AlphaZero |." https://sebastianbodenstein.net/post/alphazero/ (accessed Feb. 01, 2022).
 
 ### Diagrams
 
-* [21]“AlphaGo Zero Explained In One Diagram | by David Foster | Applied Data Science | Medium.” https://medium.com/applied-data-science/alphago-zero-explained-in-one-diagram-365f5abf67e0 (accessed Feb. 01, 2022).
+* [21]"AlphaGo Zero Explained In One Diagram | by David Foster | Applied Data Science | Medium." https://medium.com/applied-data-science/alphago-zero-explained-in-one-diagram-365f5abf67e0 (accessed Feb. 01, 2022).
 
 ### Tutorials
 
-* [22]“AlphaZero, a novel Reinforcement Learning Algorithm, in JavaScript | by Carlos Aguayo | Towards Data Science.” https://towardsdatascience.com/alphazero-a-novel-reinforcement-learning-algorithm-deployed-in-javascript-56018503ad18 (accessed Feb. 01, 2022).
+* [22]"AlphaZero, a novel Reinforcement Learning Algorithm, in JavaScript | by Carlos Aguayo | Towards Data Science." https://towardsdatascience.com/alphazero-a-novel-reinforcement-learning-algorithm-deployed-in-javascript-56018503ad18 (accessed Feb. 01, 2022).
 
-* [23]D. Foster, “How to build your own AlphaZero AI using Python and Keras,” Applied Data Science, Dec. 02, 2019. https://medium.com/applied-data-science/how-to-build-your-own-alphazero-ai-using-python-and-keras-7f664945c188 (accessed Feb. 01, 2022).
+* [23]D. Foster, "How to build your own AlphaZero AI using Python and Keras," Applied Data Science, Dec. 02, 2019. https://medium.com/applied-data-science/how-to-build-your-own-alphazero-ai-using-python-and-keras-7f664945c188 (accessed Feb. 01, 2022).
 
-* [24]D. Foster, “How To Build Your Own MuZero AI Using Python (Part 1/3),” Applied Data Science, Feb. 23, 2021. https://medium.com/applied-data-science/how-to-build-your-own-muzero-in-python-f77d5718061a (accessed Feb. 01, 2022).
+* [24]D. Foster, "How To Build Your Own MuZero AI Using Python (Part 1/3)," Applied Data Science, Feb. 23, 2021. https://medium.com/applied-data-science/how-to-build-your-own-muzero-in-python-f77d5718061a (accessed Feb. 01, 2022).
 
-* [25]“Simple Alpha Zero.” https://web.stanford.edu/~surag/posts/alphazero.html (accessed Feb. 01, 2022).
+* [25]"Simple Alpha Zero." https://web.stanford.edu/~surag/posts/alphazero.html (accessed Feb. 01, 2022).
 
-* [26]D. Straus, “AlphaZero implementation and tutorial,” Medium, Jan. 27, 2020. https://towardsdatascience.com/alphazero-implementation-and-tutorial-f4324d65fdfc (accessed Feb. 01, 2022).
-	* Updated article: [27]“How I trained a self-supervised neural network to beat GnuGo on small (7x7) boards | by Darin Straus | Analytics Vidhya | Medium.” https://medium.com/analytics-vidhya/how-i-trained-a-self-supervised-neural-network-to-beat-gnugo-on-small-7x7-boards-6b5b418895b7 (accessed Feb. 01, 2022).
+* [26]D. Straus, "AlphaZero implementation and tutorial," Medium, Jan. 27, 2020. https://towardsdatascience.com/alphazero-implementation-and-tutorial-f4324d65fdfc (accessed Feb. 01, 2022).
+	* Updated article: [27]"How I trained a self-supervised neural network to beat GnuGo on small (7x7) boards | by Darin Straus | Analytics Vidhya | Medium." https://medium.com/analytics-vidhya/how-i-trained-a-self-supervised-neural-network-to-beat-gnugo-on-small-7x7-boards-6b5b418895b7 (accessed Feb. 01, 2022).
 	* [28]cody2007, alpha_go_zero_implementation. 2021. Accessed: Feb. 01, 2022. [Online]. Available: https://github.com/cody2007/alpha_go_zero_implementation
 
 
