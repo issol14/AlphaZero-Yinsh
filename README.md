@@ -7,4 +7,4 @@
 | `model.ipynb`     | `YinshNet`: Policy + Value head 출력하는 CNN                
 | `selfplay.ipynb`  | MCTS 기반 에이전트가 대국하여 학습용 (state, policy, value) 생성    
 | `test.ipynb`      | 학습된 모델의 입력 처리, 예측, 학습 가능 여부를 간단히 테스트  
-| `train.ipynb`     | selfplay로 생성된 데이터 기반으로 모델 학습 (loss: CE + MSE)           
+| `train.ipynb`     | 준비된 (state, action, value) 데이터를 이용해 YinshNet 모델 학습 (loss: KLDiv + MSE)      
