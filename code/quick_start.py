@@ -14,7 +14,9 @@ Usage:
 import os
 import sys
 import torch
-from datetime import datetime
+from datetime import datetime, timedelta
+from tqdm import tqdm
+import time
 
 # Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +24,11 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from yinsh import YinshModel, YinshAgent, Color
 from scripts.selfplay import play_game, generate_training_data, save_game_data
 from scripts.train import create_training_batch, train_model
+
+
+def format_time(seconds):
+    """초를 시:분:초 형식으로 변환"""
+    return str(timedelta(seconds=int(seconds)))
 
 
 def quick_start():
@@ -54,9 +61,23 @@ def quick_start():
         f"✅ Model created with {sum(p.numel() for p in model.parameters()):,} parameters"
     )
 
-    # 메인 루프
-    for iteration in range(iterations):
+    # 전체 시작 시간
+    total_start_time = time.time()
+
+    # 통계 변수
+    total_games_played = 0
+    total_positions_generated = 0
+
+    # 메인 루프 (진행률 바 추가)
+    for iteration in tqdm(
+        range(iterations),
+        desc="🔄 Iterations",
+        unit="iter",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+    ):
+        iteration_start_time = time.time()
         print(f"\n🔄 Iteration {iteration + 1}/{iterations}")
+        print(f"⏱️  Started at: {datetime.now().strftime('%H:%M:%S')}")
 
         # Self-play
         print(f"🎮 Playing {games_per_iteration} games...")
@@ -66,11 +87,29 @@ def quick_start():
         agent1.neural_network = model
         agent2.neural_network = model
 
-        total_positions = 0
+        iteration_positions = 0
+        white_wins = 0
+        black_wins = 0
+        draws = 0
 
-        for game_id in range(games_per_iteration):
+        # 게임 진행률 바
+        for game_id in tqdm(
+            range(games_per_iteration),
+            desc=f"🎮 Games (Iter {iteration+1})",
+            unit="game",
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]",
+        ):
             game_history, winner, turns = play_game(agent1, agent2)
-            total_positions += len(game_history)
+            iteration_positions += len(game_history)
+            total_positions_generated += len(game_history)
+
+            # 승자 통계
+            if winner == Color.WHITE:
+                white_wins += 1
+            elif winner == Color.BLACK:
+                black_wins += 1
+            else:
+                draws += 1
 
             training_data = generate_training_data(game_history, winner)
             save_game_data(
@@ -79,12 +118,18 @@ def quick_start():
                 f"iter_{iteration+1}_game_{game_id}",
             )
 
-            if (game_id + 1) % 5 == 0:
-                print(
-                    f"   📊 Game {game_id + 1}: {len(game_history)} positions, Winner: {winner}"
-                )
+        total_games_played += games_per_iteration
 
-        print(f"📈 Generated {total_positions} training positions")
+        # Iteration 통계 출력
+        print(f"📈 Iteration {iteration + 1} Statistics:")
+        print(f"   ├── Positions generated: {iteration_positions:,}")
+        print(
+            f"   ├── White wins: {white_wins} ({white_wins/games_per_iteration*100:.1f}%)"
+        )
+        print(
+            f"   ├── Black wins: {black_wins} ({black_wins/games_per_iteration*100:.1f}%)"
+        )
+        print(f"   └── Draws: {draws} ({draws/games_per_iteration*100:.1f}%)")
 
         # Training
         print(f"🎯 Training model...")
@@ -93,6 +138,7 @@ def quick_start():
         )
 
         if states is not None:
+            # 학습 진행률 바 추가
             trained_model = train_model(
                 model, states, policies, values, epochs=epochs, batch_size=16, lr=0.001
             )
@@ -106,7 +152,31 @@ def quick_start():
         torch.save(model, model_path)
         print(f"💾 Model saved: {model_path}")
 
+        # Iteration 완료 시간
+        iteration_time = time.time() - iteration_start_time
+        print(
+            f"⏱️  Iteration {iteration + 1} completed in {format_time(iteration_time)}"
+        )
+
+        # 예상 남은 시간 계산
+        if iteration < iterations - 1:
+            avg_iteration_time = (time.time() - total_start_time) / (iteration + 1)
+            remaining_iterations = iterations - iteration - 1
+            estimated_remaining = avg_iteration_time * remaining_iterations
+            print(f"🕐 Estimated time remaining: {format_time(estimated_remaining)}")
+
+    # 전체 완료 시간 계산
+    total_time = time.time() - total_start_time
+
     print(f"\n🎉 Quick start training completed!")
+    print(f"⏱️ Total time: {format_time(total_time)}")
+    print(f"📊 Final Statistics:")
+    print(f"   ├── Total iterations: {iterations}")
+    print(f"   ├── Total games played: {total_games_played}")
+    print(f"   ├── Total positions generated: {total_positions_generated:,}")
+    print(
+        f"   └── Average positions per game: {total_positions_generated/total_games_played:.1f}"
+    )
     print(f"📁 Results saved to: {output_dir}")
     print(f"🔧 To continue training, run: python main.py --continue-from {model_path}")
 
