@@ -1,63 +1,48 @@
 import logging
 import config
-from keras.models import Model
 import time
 import utils
 from tqdm import tqdm
 from mcts import MCTS
 import numpy as np
-
+import torch
 import os
 from dotenv import load_dotenv
+from model import YinshNet
+
 load_dotenv()
 
+
 class Agent:
-    def __init__(self, model_path=None, state=None):
+    def __init__(self, model_path=None):
         """
         An agent that can play Yinsh moves.
-        Uses local model predictions only (no server).
+        Uses PyTorch model predictions.
         It holds an MCTS object that is used to run MCTS simulations to build a tree.
         """
-        self.local_predictions = True
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
         
-        if model_path is not None:
-            logging.info("Loading local model")
-            from tensorflow.python.ops.numpy_ops import np_config
-            import tensorflow as tf
-            from tensorflow.keras.models import load_model
-            self.model = load_model(model_path)
-            np_config.enable_numpy_behavior()
+        if model_path is not None and os.path.exists(model_path):
+            logging.info(f"Loading PyTorch model from {model_path}")
+            self.model = YinshNet()
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            self.model.to(self.device)
+            self.model.eval()
         else:
-            logging.info("No model path provided, will build new model")
-            self.model = None
+            logging.info("Creating new model")
+            self.model = YinshNet()
+            self.model.to(self.device)
 
-        # Initialize default state if none provided
-        if state is None:
-            state = {
-                'board': np.zeros((config.BOARD_SIZE, config.BOARD_SIZE, 4)),
-                'current_player': 0,
-                'game_phase': 'placement',
-                'rings_placed': [0, 0],
-                'rings_removed': [0, 0],
-                'move_count': 0
-            }
-
-        self.mcts = MCTS(self, state=state)
+        # Don't initialize MCTS here - it will be created fresh for each move
+        self.mcts = None
         
-
-    def build_model(self) -> Model:
-        """
-        Build a new model based on the configuration in config.py
-        """
-        from rlmodelbuilder import RLModelBuilder
-        model_builder = RLModelBuilder(config.INPUT_SHAPE, config.OUTPUT_SHAPE)
-        model = model_builder.build_model()
-        return model
-
     def run_simulations(self, n: int = 1):
         """
         Run n simulations of the MCTS algorithm. This function gets called every move.
         """
+        if self.mcts is None:
+            raise ValueError("MCTS not initialized. Call create_mcts first.")
         print(f"Running {n} simulations...")
         self.mcts.run_simulations(n)
 
@@ -73,13 +58,16 @@ class Agent:
             os.makedirs(config.MODEL_FOLDER)
             
         if timestamped:
-            self.model.save(f"{config.MODEL_FOLDER}/model-{time.time()}.h5")
+            filename = f"{config.MODEL_FOLDER}/model-{int(time.time())}.pt"
         else:
-            self.model.save(f"{config.MODEL_FOLDER}/model.h5")
+            filename = f"{config.MODEL_FOLDER}/model.pt"
+            
+        torch.save(self.model.state_dict(), filename)
+        logging.info(f"Model saved to {filename}")
 
     def predict(self, data):
         """
-        Predict using the local model
+        Predict using the PyTorch model
         """
         if self.model is None:
             # Return random predictions if no model
@@ -88,7 +76,17 @@ class Agent:
             v = np.random.random((batch_size, 1)) * 2 - 1  # Random value between -1 and 1
             return p[0], v[0][0]
         
-        # Use tf.function for optimization
-        import local_prediction
-        p, v = local_prediction.predict_local(self.model, data)
-        return p.numpy(), v[0][0] 
+        # Convert numpy to tensor
+        if isinstance(data, np.ndarray):
+            data = torch.FloatTensor(data).to(self.device)
+        
+        with torch.no_grad():
+            self.model.eval()
+            policy, value = self.model(data)
+            
+            # Convert back to numpy
+            policy = torch.exp(policy)  # Convert log_softmax back to probabilities
+            policy = policy.cpu().numpy()
+            value = value.cpu().numpy()
+            
+            return policy[0], value[0][0] 

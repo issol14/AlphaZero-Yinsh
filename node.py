@@ -29,22 +29,42 @@ class Node:
         """
         Take a step in the game, returns new state
         """
-        # TODO: Implement Yinsh move execution
-        # This should apply the action to the current state
-        # and return the new game state
+        # Get the board environment from current state
+        board_env = self.state.get('board')
         
-        new_state = self.state.copy()
-        # Apply move logic here
-        # new_state = apply_move(self.state, action)
-        
-        return new_state
+        if hasattr(board_env, 'step'):
+            # Make a copy of the environment or state
+            from yinshEnv import YinshEnv
+            new_env = YinshEnv()
+            new_env.load_from_state_string(board_env.get_state_string())
+            
+            # Apply the action
+            new_env.step(action)
+            
+            # Return new state
+            new_state = {
+                'board': new_env,
+                'current_player': new_env.current_player,
+                'game_phase': new_env.game_phase,
+                'rings_placed': new_env.rings_placed.copy(),
+                'rings_removed': new_env.rings_removed.copy(),
+                'move_count': new_env.move_count
+            }
+            return new_state
+        else:
+            # Fallback - return current state
+            return self.state
 
     def is_game_over(self) -> bool:
         """
         Check if the game is over.
         """
-        # TODO: Implement Yinsh game over check
-        # Check if any player has won (removed 3 rings)
+        # Check the board environment directly
+        board_env = self.state.get('board')
+        if hasattr(board_env, 'is_game_over'):
+            return board_env.is_game_over()
+        
+        # Fallback: check rings removed
         rings_removed = self.state.get('rings_removed', [0, 0])
         return rings_removed[0] >= 3 or rings_removed[1] >= 3
 

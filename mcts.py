@@ -139,10 +139,14 @@ class MCTS:
                 leaf.value = 0
             return leaf
 
-        # Get all possible moves
-        env = YinshEnv()
-        # Set env state from leaf.state
-        possible_actions = env.get_valid_moves()
+        # Get all possible moves from the board environment
+        board_env = leaf.state.get('board')
+        if hasattr(board_env, 'get_valid_moves'):
+            possible_actions = board_env.get_valid_moves()
+        else:
+            # Fallback: create temporary environment
+            env = YinshEnv()
+            possible_actions = env.get_valid_moves()
 
         if not len(possible_actions):
             # No valid moves, estimate value
@@ -153,11 +157,16 @@ class MCTS:
             return leaf
 
         # predict p and v using neural network
-        input_state = YinshEnv.state_to_input(
-            leaf.state.get('board'),
-            leaf.state.get('current_player', 0),
-            leaf.state.get('game_phase', 'placement')
-        )
+        board_env = leaf.state.get('board')
+        if hasattr(board_env, '_state_to_input_array'):
+            input_state = board_env._state_to_input_array()
+        else:
+            # Create temporary environment from state string
+            temp_env = YinshEnv()
+            # Set state manually
+            temp_env.current_player = leaf.state.get('current_player', 0)
+            temp_env.game_phase = leaf.state.get('game_phase', 'placement')
+            input_state = temp_env._state_to_input_array()
         p, v = self.agent.predict(input_state)
 
         # map probabilities to moves

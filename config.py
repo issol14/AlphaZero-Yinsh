@@ -34,10 +34,10 @@ INPUT_SHAPE = (n, n, amount_of_input_planes)
 # For simplicity, using position-based action space
 max_positions = n * n
 # Actions: place ring, move ring, remove markers
-OUTPUT_SHAPE = (max_positions * 3, 1)  # 3 types of actions per position
+OUTPUT_SHAPE = (max_positions * 3,)  # Fixed: removed extra dimension
 
 # ============= NEURAL NETWORK PARAMETERS =============
-LEARNING_RATE = 0.2
+LEARNING_RATE = 0.001  # Fixed: much lower learning rate for stable training
 # filters for the convolutional layers
 CONVOLUTION_FILTERS = 256
 # amount of hidden residual layers
@@ -47,7 +47,7 @@ AMOUNT_OF_RESIDUAL_BLOCKS = 19
 MODEL_FOLDER = os.environ.get("MODEL_FOLDER", './models')
 
 # ============= TRAINING PARAMETERS =============
-BATCH_SIZE = 64
+BATCH_SIZE = 32  # Fixed: smaller batch size for limited data
 LOSS_PLOTS_FOLDER = "./plots"
 
 # ============= MEMORY CONFIGURATION =============

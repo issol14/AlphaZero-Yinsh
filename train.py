@@ -1,201 +1,282 @@
-import argparse
 import os
-import time
-from typing import Tuple
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from yinshEnv import YinshEnv
-import config
-import tensorflow as tf
-from keras.models import Model
-from keras.models import load_model, save_model
-from matplotlib import pyplot as plt
-import pandas as pd
-import uuid
-import utils
-from tqdm import tqdm
+import matplotlib.pyplot as plt
 from datetime import datetime
+import pandas as pd
+from tqdm import tqdm
+import config
+from model import YinshNet
+from agent import Agent
+from yinshEnv import YinshEnv
+from game import Game
+import logging
+
+# 로깅 설정
+logging.basicConfig(level=logging.INFO, format=' %(message)s')
+
+
+class YinshDataset(Dataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        state, action_probs, value = self.data[idx]
+        
+        # 상태를 tensor로 변환
+        if isinstance(state, dict):
+            # dict에서 board 정보 추출
+            board_env = state.get('board')
+            if hasattr(board_env, '_state_to_input_array'):
+                # YinshEnv 객체에서 배열 생성
+                board = board_env._state_to_input_array().squeeze()
+            else:
+                board = np.zeros(config.INPUT_SHAPE)
+        else:
+            board = state
+            
+        state_tensor = torch.tensor(board, dtype=torch.float32)
+        
+        # 액션 확률을 벡터로 변환
+        action_vec = torch.zeros(config.OUTPUT_SHAPE[0])
+        if isinstance(action_probs, dict):
+            for action_str, prob in action_probs.items():
+                # 간단한 해싱으로 액션을 인덱스로 변환
+                action_idx = hash(action_str) % config.OUTPUT_SHAPE[0]
+                action_vec[action_idx] = prob
+        else:
+            action_vec = torch.tensor(action_probs, dtype=torch.float32)
+        
+        value_tensor = torch.tensor([value], dtype=torch.float32)
+        return state_tensor, action_vec, value_tensor
 
 
 class Trainer:
-    def __init__(self, model: Model):
-        self.model = model
-        self.batch_size = config.BATCH_SIZE
-
-    def sample_batch(self, data):
-        if self.batch_size > len(data):
-            return data
+    def __init__(self, model=None):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
+        
+        if model is None:
+            self.model = YinshNet()
         else:
-            np.random.shuffle(data)
-            return data[:self.batch_size]
+            self.model = model
+            
+        self.model.to(self.device)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=config.LEARNING_RATE)
+        self.policy_loss_fn = nn.KLDivLoss(reduction='batchmean')
+        self.value_loss_fn = nn.MSELoss()
 
-    def split_Xy(self, data) -> Tuple[np.ndarray, np.ndarray]:
+    def train(self, data, epochs=None):
         """
-        Split data into X (input) and y (output) for training
+        Train the model on the provided data
         """
-        # Game state to input format
-        X = []
-        y_probs = []
-        y_value = []
+        if not data:
+            print("No data provided for training")
+            return []
+            
+        dataset = YinshDataset(data)
+        dataloader = DataLoader(dataset, batch_size=config.BATCH_SIZE, shuffle=True)
+        self.model.train()
+
+        if epochs is None:
+            epochs = max(5, len(dataset) // config.BATCH_SIZE)
         
-        for position in data:
-            # Convert game state to neural network input
-            game_state = position[0]
-            board = game_state.get('board', np.zeros((config.BOARD_SIZE, config.BOARD_SIZE, 4)))
-            current_player = game_state.get('current_player', 0)
-            game_phase = game_state.get('game_phase', 'placement')
-            
-            # Convert to input format
-            input_state = YinshEnv.state_to_input(board, current_player, game_phase)
-            X.append(input_state[0])  # Remove batch dimension
-            
-            # Convert move probabilities to output vector
-            moves = utils.moves_to_output_vector(position[1], game_state)
-            y_probs.append(moves)
-            
-            # Game result (winner)
-            y_value.append(position[2])
-        
-        return np.array(X), (np.array(y_probs), np.array(y_value))
-
-    def train_batch(self, X, y_probs, y_value):
-        return self.model.train_on_batch(x=X, y={
-                "policy_head": y_probs,
-                "value_head": y_value
-            }, return_dict=True)
-
-    def train_all_data(self, data):
-        """
-        Train the model on all given data.
-        """
         history = []
-        np.random.shuffle(data)
-        print("Splitting data into features and targets...")
-        X, y = self.split_Xy(data)
-        print("Training batches...")
+        print(f"Training for {epochs} epochs with {len(dataset)} samples")
         
-        for part in tqdm(range(len(X)//self.batch_size)):
-            start = part * self.batch_size
-            end = start + self.batch_size
-            losses = self.train_batch(X[start:end], y[0][start:end], y[1][start:end])
-            history.append(losses)
-        return history
+        for epoch in tqdm(range(epochs), desc="Training epochs"):
+            epoch_losses = []
+            for batch_idx, (states, policy_targets, value_targets) in enumerate(dataloader):
+                states = states.to(self.device)
+                policy_targets = policy_targets.to(self.device)
+                value_targets = value_targets.to(self.device)
 
-    def train_random_batches(self, data):
-        """
-        Train the model on random batches of data
-        """
-        history = []
-        X, (y_probs, y_value) = self.split_Xy(data)
-        
-        num_batches = max(5, len(data) // self.batch_size) * 2
-        
-        for _ in tqdm(range(num_batches)):
-            indexes = np.random.choice(len(data), size=min(self.batch_size, len(data)), replace=True)
-            # only select X values with these indexes
-            X_batch = X[indexes]
-            y_probs_batch = y_probs[indexes]
-            y_value_batch = y_value[indexes]
+                self.optimizer.zero_grad()
+                pred_policy, pred_value = self.model(states)
+                
+                # Policy loss (KL divergence)
+                loss_policy = self.policy_loss_fn(pred_policy, policy_targets)
+                
+                # Value loss (MSE)
+                loss_value = self.value_loss_fn(pred_value, value_targets)
+                
+                # Combined loss
+                total_loss = 0.5 * loss_policy + 0.5 * loss_value
+
+                total_loss.backward()
+                self.optimizer.step()
+                
+                batch_losses = {
+                    "epoch": epoch,
+                    "batch": batch_idx,
+                    "total_loss": total_loss.item(),
+                    "policy_loss": loss_policy.item(),
+                    "value_loss": loss_value.item()
+                }
+                epoch_losses.append(batch_losses)
+                history.append(batch_losses)
+                
+            # Print epoch summary
+            avg_total_loss = np.mean([x["total_loss"] for x in epoch_losses])
+            avg_policy_loss = np.mean([x["policy_loss"] for x in epoch_losses])
+            avg_value_loss = np.mean([x["value_loss"] for x in epoch_losses])
             
-            losses = self.train_batch(X_batch, y_probs_batch, y_value_batch)
-            history.append(losses)
+            print(f"Epoch {epoch+1}/{epochs}: "
+                  f"Total Loss: {avg_total_loss:.4f}, "
+                  f"Policy Loss: {avg_policy_loss:.4f}, "
+                  f"Value Loss: {avg_value_loss:.4f}")
+                
         return history
 
     def plot_loss(self, history):
+        """Plot training losses"""
+        if not history:
+            print("No history to plot")
+            return
+            
         df = pd.DataFrame(history)
-        df[['loss', 'policy_head_loss', 'value_head_loss']] = df[['loss', 'policy_head_loss', 'value_head_loss']].apply(pd.to_numeric, errors='coerce')
         
-        total_loss = df[['loss']].values
-        policy_loss = df[['policy_head_loss']].values
-        value_loss = df[['value_head_loss']].values
+        plt.figure(figsize=(12, 4))
         
-        plt.figure(figsize=(10, 6))
-        plt.plot(total_loss, label='Total Loss')
-        plt.plot(policy_loss, label='Policy Loss')
-        plt.plot(value_loss, label='Value Loss')
-        plt.legend()
-        plt.title(f"Yinsh Training Loss over Time\nLearning rate: {config.LEARNING_RATE}")
+        plt.subplot(1, 3, 1)
+        plt.plot(df['total_loss'])
+        plt.title('Total Loss')
         plt.xlabel('Batch')
         plt.ylabel('Loss')
         
-        # Create plots folder if it doesn't exist
+        plt.subplot(1, 3, 2)
+        plt.plot(df['policy_loss'])
+        plt.title('Policy Loss')
+        plt.xlabel('Batch')
+        plt.ylabel('Loss')
+        
+        plt.subplot(1, 3, 3)
+        plt.plot(df['value_loss'])
+        plt.title('Value Loss')
+        plt.xlabel('Batch')
+        plt.ylabel('Loss')
+        
+        plt.tight_layout()
+        
         os.makedirs(config.LOSS_PLOTS_FOLDER, exist_ok=True)
-        plt.savefig(f"{config.LOSS_PLOTS_FOLDER}/loss-{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.png")
-        plt.close()
+        name = f"loss-{datetime.now().strftime('%Y%m%d-%H%M%S')}.png"
+        plt.savefig(os.path.join(config.LOSS_PLOTS_FOLDER, name))
+        print(f"Loss plot saved to {os.path.join(config.LOSS_PLOTS_FOLDER, name)}")
+        plt.show()
 
-    def save_model(self):
+    def save_model(self, path=None):
+        """Save the trained model"""
         os.makedirs(config.MODEL_FOLDER, exist_ok=True)
-        path = f"{config.MODEL_FOLDER}/model-{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.h5"
-        save_model(self.model, path)
-        print(f"Model trained and saved to {path}")
+        if path is None:
+            path = os.path.join(config.MODEL_FOLDER, f"model-{datetime.now().strftime('%Y%m%d-%H%M%S')}.pt")
+        
+        torch.save(self.model.state_dict(), path)
+        print(f"Model saved to {path}")
+        return path
+
+
+def generate_self_play_data(n_games=10, simulations_per_move=100):
+    """
+    Generate training data through self-play
+    """
+    print(f"Generating self-play data with {n_games} games")
+    
+    # Create two agents
+    agent1 = Agent()
+    agent2 = Agent()
+    
+    all_data = []
+    
+    for game_idx in range(n_games):
+        print(f"Playing game {game_idx + 1}/{n_games}")
+        
+        # Create game environment
+        env = YinshEnv()
+        game = Game(env, agent1, agent2)
+        
+        # Play the game and collect data
+        try:
+            # Play one game with reduced simulations for faster training data generation
+            original_sims = config.SIMULATIONS_PER_MOVE
+            config.SIMULATIONS_PER_MOVE = simulations_per_move
+            
+            result = game.play_one_game(stochastic=True)
+            
+            # Add game data to training data
+            if game.memory and len(game.memory) > 0 and len(game.memory[-1]) > 0:
+                all_data.extend(game.memory[-1])
+                print(f"Game {game_idx + 1} completed. Result: {result}. "
+                      f"Generated {len(game.memory[-1])} training samples")
+            else:
+                print(f"Game {game_idx + 1} generated no data")
+                
+            # Restore original simulation count
+            config.SIMULATIONS_PER_MOVE = original_sims
+            
+        except Exception as e:
+            print(f"Error in game {game_idx + 1}: {e}")
+            continue
+    
+    print(f"Generated {len(all_data)} total training samples from {n_games} games")
+    return all_data
+
+
+def train_from_self_play(n_games=5, training_epochs=10):
+    """
+    Complete training pipeline: generate data and train model
+    """
+    print("Starting self-play training pipeline")
+    
+    # Generate training data through self-play
+    training_data = generate_self_play_data(n_games=n_games, simulations_per_move=50)
+    
+    if not training_data:
+        print("No training data generated. Cannot train model.")
+        return None
+    
+    # Train the model
+    trainer = Trainer()
+    print(f"Training model on {len(training_data)} samples")
+    
+    history = trainer.train(training_data, epochs=training_epochs)
+    
+    # Plot training results
+    trainer.plot_loss(history)
+    
+    # Save the trained model
+    model_path = trainer.save_model()
+    
+    print("Training completed successfully!")
+    return model_path
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train the Yinsh model')
-    parser.add_argument('--model', type=str, help='The model to train')
-    parser.add_argument('--data-folder', type=str, help='The data folder to train on')
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Train Yinsh AI")
+    parser.add_argument("--games", type=int, default=5, help="Number of self-play games")
+    parser.add_argument("--epochs", type=int, default=10, help="Training epochs")
+    parser.add_argument("--test-model", action="store_true", help="Test model creation only")
+    
     args = parser.parse_args()
-    args = vars(args)
-
-    if not args["model"]:
-        print("Error: --model argument is required")
-        exit(1)
     
-    if not args["data_folder"]:
-        print("Error: --data-folder argument is required")
-        exit(1)
-
-    # Load the model
-    try:
-        model = load_model(args["model"])
-        print(f"Loaded model from {args['model']}")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        print("Creating new model...")
-        from rlmodelbuilder import RLModelBuilder
-        model_builder = RLModelBuilder(config.INPUT_SHAPE, config.OUTPUT_SHAPE)
-        model = model_builder.build_model()
-    
-    trainer = Trainer(model=model)
-
-    # Load training data
-    folder = args['data_folder']
-    if not os.path.exists(folder):
-        print(f"Error: Data folder {folder} does not exist")
-        exit(1)
-    
-    files = os.listdir(folder)
-    data = []
-    print(f"Loading all games from {folder}...")
-    
-    for file in files:
-        if file.endswith('.npy'):
-            try:
-                game_data = np.load(f"{folder}/{file}", allow_pickle=True)
-                data.append(game_data)
-            except Exception as e:
-                print(f"Error loading {file}: {e}")
-                continue
-    
-    if not data:
-        print("No valid training data found!")
-        exit(1)
-    
-    data = np.concatenate(data)
-    
-    # Analyze data
-    print(f"Total positions: {len(data)}")
-    winners = [pos[2] for pos in data if pos[2] is not None]
-    if winners:
-        print(f"Player 1 wins: {len([w for w in winners if w > 0])}")
-        print(f"Player 2 wins: {len([w for w in winners if w < 0])}")
-        print(f"Draws: {len([w for w in winners if w == 0])}")
-    
-    # Train the model
-    print(f"Training with {len(data)} positions")
-    history = trainer.train_random_batches(data)
-    
-    # Plot and save results
-    trainer.plot_loss(history)
-    trainer.save_model()
-    
-    print("Training completed!") 
+    if args.test_model:
+        # Test model creation
+        print("Testing model creation...")
+        model = YinshNet()
+        print(f"Model created successfully with {sum(p.numel() for p in model.parameters())} parameters")
+        
+        # Test forward pass
+        test_input = torch.randn(1, *config.INPUT_SHAPE)
+        with torch.no_grad():
+            policy, value = model(test_input)
+            print(f"Forward pass successful. Policy shape: {policy.shape}, Value shape: {value.shape}")
+    else:
+        # Full training pipeline
+        train_from_self_play(n_games=args.games, training_epochs=args.epochs) 
