@@ -80,16 +80,25 @@ def parse_position(name: str) -> Position:
     except (ValueError, IndexError):
         raise ValueError(f"Invalid position name: {name}")
 
-# Direction vectors for YINSH (8 directions: horizontal, vertical, diagonal)
+# Direction vectors for YINSH hexagonal board (6 directions)
+# Based on actual YINSH board coordinate system:
+# 12 o'clock (North) = +y axis, 4 o'clock (East) = +x axis
 DIRECTIONS = [
-    (1, 0),   # East
-    (-1, 0),  # West
-    (0, 1),   # South
-    (0, -1),  # North
-    (1, -1),  # Northeast
-    (-1, 1),  # Southwest
-    (1, 1),   # Southeast
-    (-1, -1), # Northwest
+    (0, 1),   # 12시 (북쪽)
+    (1, 1),   # 2시 (북동쪽)  
+    (1, 0),   # 4시 (동쪽)
+    (0, -1),  # 6시 (남쪽)
+    (-1, -1), # 8시 (남서쪽)
+    (-1, 0),  # 10시 (서쪽)
+]
+
+# Canonical directions to avoid checking duplicate lines (3 directions only)
+# When checking for lines, we only need to check in 3 directions since
+# checking both directions of a line would be redundant
+CANONICAL_DIRECTIONS = [
+    (0, 1),   # 12시-6시 (North-South lines)
+    (1, 1),   # 2시-8시 (Northeast-Southwest lines)  
+    (1, 0),   # 4시-10시 (East-West lines)
 ]
 
 # Game piece types
@@ -291,63 +300,64 @@ class Board:
         return positions
     
     def get_path_between(self, from_pos: Position, to_pos: Position) -> Optional[List[Position]]:
-        """Get path between two positions if they're in a straight line."""
+        """Get path between two positions if they're in a straight line in hexagonal directions."""
         from_x, from_y = position_to_coord(from_pos)
         to_x, to_y = position_to_coord(to_pos)
         
         diff_x = to_x - from_x
         diff_y = to_y - from_y
         
-        # Check if positions are in a straight line (same direction as one of DIRECTIONS)
-        for dx, dy in DIRECTIONS:
-            if dx == 0 and diff_x == 0:
-                # Vertical line
-                steps = abs(diff_y)
-                if steps > 0 and diff_y // steps == dy:
-                    path = []
-                    for i in range(steps + 1):
-                        x = from_x + dx * i
-                        y = from_y + dy * i
-                        pos = coord_to_position(x, y)
-                        if pos is None:
-                            return None
-                        path.append(pos)
-                    return path
-            elif dy == 0 and diff_y == 0:
-                # Horizontal line
-                steps = abs(diff_x)
-                if steps > 0 and diff_x // steps == dx:
-                    path = []
-                    for i in range(steps + 1):
-                        x = from_x + dx * i
-                        y = from_y + dy * i
-                        pos = coord_to_position(x, y)
-                        if pos is None:
-                            return None
-                        path.append(pos)
-                    return path
-            elif dx != 0 and dy != 0 and diff_x != 0 and diff_y != 0:
-                # Diagonal line
-                if diff_x * dy == diff_y * dx:
-                    steps = abs(diff_x)
-                    if steps == abs(diff_y) and steps > 0:
-                        step_x = diff_x // steps
-                        step_y = diff_y // steps
-                        if step_x == dx and step_y == dy:
-                            path = []
-                            for i in range(steps + 1):
-                                x = from_x + dx * i
-                                y = from_y + dy * i
-                                pos = coord_to_position(x, y)
-                                if pos is None:
-                                    return None
-                                path.append(pos)
-                            return path
+        # If positions are the same, return single position
+        if diff_x == 0 and diff_y == 0:
+            return [from_pos]
         
-        return None
+        # Check if the difference vector is a multiple of one of the 6 hexagonal directions
+        for dx, dy in DIRECTIONS:
+            if dx == 0 and dy == 0:
+                continue
+                
+            # Check if diff is a multiple of this direction
+            # We need to find a scaling factor k such that (diff_x, diff_y) = k * (dx, dy)
+            if dx == 0:
+                if diff_x != 0:
+                    continue
+                if dy == 0:
+                    continue
+                if diff_y % dy != 0:
+                    continue
+                k = diff_y // dy
+            elif dy == 0:
+                if diff_y != 0:
+                    continue
+                if diff_x % dx != 0:
+                    continue
+                k = diff_x // dx
+            else:
+                # Both dx and dy are non-zero
+                if diff_x % dx != 0 or diff_y % dy != 0:
+                    continue
+                k_x = diff_x // dx
+                k_y = diff_y // dy
+                if k_x != k_y:
+                    continue
+                k = k_x
+            
+            # If k is positive, we found a valid direction
+            if k > 0:
+                path = []
+                for i in range(k + 1):
+                    x = from_x + dx * i
+                    y = from_y + dy * i
+                    pos = coord_to_position(x, y)
+                    if pos is None:
+                        return None  # Path goes off the board
+                    path.append(pos)
+                return path
+        
+        return None  # No valid straight line path found
     
     def check_five_in_row(self, color: Color) -> List[List[Position]]:
-        """Check for lines of 5+ consecutive markers of the same color (based on API logic)."""
+        """Check for lines of 5+ consecutive markers of the same color using hexagonal directions."""
         lines = []
         checked = set()
         
@@ -357,8 +367,8 @@ class Board:
             if marker_color == color:
                 marker_positions.add(pos)
         
-        # Use canonical directions to avoid duplicates (4 directions instead of 8)
-        canonical_directions = [(1, 0), (0, 1), (1, -1), (1, 1)]
+        # Use canonical directions to avoid duplicates (3 directions for hexagonal board)
+        # We only check in 3 directions since the opposite directions would create duplicate lines
         
         # Check each marker position as potential start of a line
         for start_pos in marker_positions:
@@ -367,7 +377,7 @@ class Board:
                 
             x, y = position_to_coord(start_pos)
             
-            for dx, dy in canonical_directions:
+            for dx, dy in CANONICAL_DIRECTIONS:
                 # Check if this is actually the start of the line (no marker behind it)
                 prev_x, prev_y = x - dx, y - dy
                 prev_pos = coord_to_position(prev_x, prev_y)
@@ -417,7 +427,7 @@ class Board:
         player_rings = [pos for pos, color in self.rings.items() if color == self.turn]
         
         for ring_pos in player_rings:
-            # Generate moves for this ring in all 8 directions
+            # Generate moves for this ring in all 6 hexagonal directions
             for direction in DIRECTIONS:
                 positions = self.get_line_positions(ring_pos, direction)
                 
@@ -530,11 +540,21 @@ class Board:
                 # Flip markers on path
                 self.flip_markers_on_path(move.from_position, move.to_position)
                 
-                # Check for five in a row for current player
-                lines = self.check_five_in_row(self.turn)
-                if lines:
+                # Check for five in a row for current player first
+                current_player_lines = self.check_five_in_row(self.turn)
+                if current_player_lines:
                     self.phase = GamePhase.MARKER_REMOVE
                     # Don't switch turns yet - same player removes markers
+                    return
+                
+                # Check for five in a row for opponent
+                opponent_lines = self.check_five_in_row(not self.turn)
+                if opponent_lines:
+                    # Switch to opponent for marker removal
+                    self.turn = not self.turn
+                    if self.turn == WHITE:
+                        self.fullmove_number += 1
+                    self.phase = GamePhase.MARKER_REMOVE
                     return
         
         elif self.phase == GamePhase.MARKER_REMOVE:
@@ -728,9 +748,9 @@ def encode_move(move: Move, board: Board) -> int:
     
     Encoding scheme:
     - Ring placement: position (0-84)
-    - Ring movement: from_pos * 85 + to_pos (85-7224)
-    - Marker removal: 7225 + line_hash (7225+)
-    - Ring removal: position (0-84, but distinguished by game phase)
+    - Ring movement: from_pos * 85 + to_pos + 85 (85-7309)
+    - Marker removal: 7310 + legal_move_index (7310+)
+    - Ring removal: position + 85 (85-169, but distinguished by game phase)
     
     Returns action index (0 to action_space_size-1)
     """
@@ -738,15 +758,24 @@ def encode_move(move: Move, board: Board) -> int:
         return 0  # Null move
     
     if move.positions:
-        # Marker removal - encode as hash of positions
-        line_hash = sum(pos * (i+1) for i, pos in enumerate(sorted(move.positions)))
-        return 7225 + (line_hash % 1000)  # Limit hash range
+        # Marker removal - find index among legal marker removal moves
+        legal_marker_moves = list(board.generate_marker_removal_moves())
+        for i, legal_move in enumerate(legal_marker_moves):
+            if legal_move.positions == move.positions:
+                return 7310 + i
+        return None  # Invalid marker removal move
     elif move.from_position is None:
-        # Ring placement or ring removal - just position
-        return move.to_position
+        # Ring placement or ring removal
+        if board.phase == GamePhase.PLACEMENT:
+            return move.to_position  # 0-84
+        elif board.phase == GamePhase.RING_REMOVE:
+            return 85 + move.to_position  # 85-169
+        return None
     else:
-        # Ring movement - from_pos * 85 + to_pos
-        return 85 + move.from_position * 85 + move.to_position
+        # Ring movement - from_pos * 85 + to_pos + 85
+        if 0 <= move.from_position < 85 and 0 <= move.to_position < 85:
+            return 85 + move.from_position * 85 + move.to_position  # 85-7309
+        return None
 
 def decode_move(action: int, board: Board) -> Move:
     """
@@ -758,19 +787,31 @@ def decode_move(action: int, board: Board) -> Move:
         return Move.null()
     
     if action < 85:
-        # Ring placement or ring removal
-        if board.phase == GamePhase.PLACEMENT or board.phase == GamePhase.RING_REMOVE:
+        # Ring placement (only valid in placement phase)
+        if board.phase == GamePhase.PLACEMENT:
             return Move(to_position=action)
         return None
-    elif action < 7225:
-        # Ring movement
-        action -= 85
-        from_pos = action // 85
-        to_pos = action % 85
-        return Move(from_position=from_pos, to_position=to_pos)
+    elif action < 170:
+        # Ring removal (only valid in ring removal phase) 
+        if board.phase == GamePhase.RING_REMOVE:
+            return Move(to_position=action - 85)
+        return None
+    elif action < 7310:
+        # Ring movement (only valid in main phase)
+        if board.phase == GamePhase.MAIN:
+            action -= 85
+            from_pos = action // 85
+            to_pos = action % 85
+            if 0 <= from_pos < 85 and 0 <= to_pos < 85:
+                return Move(from_position=from_pos, to_position=to_pos)
+        return None
     else:
-        # Marker removal - this is complex, return None for now
-        # In practice, would need to check all possible 5-consecutive lines
+        # Marker removal (only valid in marker removal phase)
+        if board.phase == GamePhase.MARKER_REMOVE:
+            legal_marker_moves = list(board.generate_marker_removal_moves())
+            move_index = action - 7310
+            if 0 <= move_index < len(legal_marker_moves):
+                return legal_marker_moves[move_index]
         return None
 
 def get_action_space_size() -> int:
@@ -780,10 +821,11 @@ def get_action_space_size() -> int:
     Returns:
         int: Total number of possible actions
     """
-    # Ring placement/removal: 85
-    # Ring movement: 85 * 85 = 7225
-    # Marker removal: ~1000 (estimated)
-    return 85 + 7225 + 1000  # 8310 total actions
+    # Ring placement: 85 (0-84)
+    # Ring removal: 85 (85-169) 
+    # Ring movement: 85 * 85 = 7225 (170-7309)
+    # Marker removal: ~500 (estimated max, 7310+)
+    return 7895  # Total actions
 
 def move_to_action_probabilities(moves: List[Move], board: Board) -> Dict[int, float]:
     """
