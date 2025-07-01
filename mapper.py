@@ -1,0 +1,70 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "dfa3b311",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# mapper.py\n",
+    "\n",
+    "from typing import List, Tuple, Dict\n",
+    "from yinsh_mcts.game_state import Action\n",
+    "\n",
+    "# === 좌표 설정 ===\n",
+    "BOARD_SIZE = 11\n",
+    "MAX_INDEX = 200  # 모델 출력 크기와 맞춤\n",
+    "\n",
+    "# === 미리 지정된 고정 액션 리스트 (index ↔ action 매핑의 기준) ===\n",
+    "ACTION_LOOKUP: List[Action] = []\n",
+    "\n",
+    "# 우선: PLACE_RING (0 ~ 99)\n",
+    "for x in range(BOARD_SIZE):\n",
+    "    for y in range(BOARD_SIZE):\n",
+    "        if len(ACTION_LOOKUP) >= 100:\n",
+    "            break\n",
+    "        ACTION_LOOKUP.append(Action(action_type=\"PLACE_RING\", to_pos=(x, y)))\n",
+    "\n",
+    "# 다음: MOVE_RING (100 ~ 199) — 예: (from=(0,0), to=(0,1))처럼 간단한 일부\n",
+    "for fx in range(5):\n",
+    "    for fy in range(5):\n",
+    "        for tx in range(5, 10):\n",
+    "            for ty in range(5, 10):\n",
+    "                if len(ACTION_LOOKUP) >= MAX_INDEX:\n",
+    "                    break\n",
+    "                ACTION_LOOKUP.append(Action(\n",
+    "                    action_type=\"MOVE_RING\",\n",
+    "                    from_pos=(fx, fy),\n",
+    "                    to_pos=(tx, ty)\n",
+    "                ))\n",
+    "\n",
+    "# === 인덱스 → 액션 ===\n",
+    "def index_to_action(index: int) -> Action:\n",
+    "    if 0 <= index < len(ACTION_LOOKUP):\n",
+    "        return ACTION_LOOKUP[index]\n",
+    "    else:\n",
+    "        raise IndexError(f\"Invalid policy index: {index}\")\n",
+    "\n",
+    "# === 액션 → 인덱스 ===\n",
+    "def action_to_index(action: Action) -> int:\n",
+    "    for idx, a in enumerate(ACTION_LOOKUP):\n",
+    "        if a.action_type != action.action_type:\n",
+    "            continue\n",
+    "        if a.to_pos != action.to_pos:\n",
+    "            continue\n",
+    "        if a.from_pos != action.from_pos:\n",
+    "            continue\n",
+    "        return idx\n",
+    "    raise ValueError(f\"Action not found in ACTION_LOOKUP: {action}\")\n"
+   ]
+  }
+ ],
+ "metadata": {
+  "language_info": {
+   "name": "python"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
