@@ -1,4 +1,43 @@
-__pycache__
+# YINSH AlphaZero - Git Ignore File
+
+# ==== Python ====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==== Virtual Environment ====
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+yinsh_env/
+
+# ==== PyTorch ====
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# ==== Training Data & Models ====
 models/*.h5
 models/old/*
 memory/[^.]*
@@ -8,3 +47,62 @@ puzzles/[^.]*
 progress.md
 full_games.txt
 savedmodel/
+
+# ==== Training Outputs ====
+quick_start_*/
+training_*/
+experiment_*/
+logs/
+tensorboard_logs/
+wandb/
+
+# ==== IDE & Editor ====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==== Jupyter Notebook ====
+.ipynb_checkpoints/
+*.ipynb
+
+# ==== Logs ====
+*.log
+logs/
+*.out
+
+# ==== Temporary Files ====
+*.tmp
+*.temp
+temp/
+tmp/
+
+# ==== OS Generated ====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ==== Project Specific ====
+# Training checkpoints
+checkpoints/
+saved_models/
+
+# Game data
+game_data/
+selfplay_data/
+
+# Evaluation results
+evaluation_results/
+
+# Configuration backups
+config_backup/
+
+# Debug outputs
+debug_output/
