@@ -1,0 +1,10 @@
+__pycache__
+models/*.h5
+models/old/*
+memory/[^.]*
+plots/old/*
+plots/loss-*.png
+puzzles/[^.]*
+progress.md
+full_games.txt
+savedmodel/
