@@ -177,7 +177,7 @@ class MCTS:
 
             # 사전 확률 설정 (액션 매핑 사용)
             try:
-                action_index = self.action_mapper.action_to_index(action)
+                action_index = self.action_mapper.get_action_index(action)
                 if action_index is not None and action_index < len(policy_probs):
                     child.prior = policy_probs[action_index]
                 else:

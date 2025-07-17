@@ -137,7 +137,7 @@ class YinshGame:
             "duration": game_duration,
             "winner": winner.name if winner else "draw",
             "winner_value": winner_value,
-            "final_state": f"Phase: {self.env.phase}, Removed rings: W{self.env.removed_rings[Color.WHITE]} B{self.env.removed_rings[Color.BLACK]}",
+            "final_state": f"Phase: {self.env.phase}, Removed rings: W{self.env.rings_removed[Color.WHITE]} B{self.env.rings_removed[Color.BLACK]}",
             "white_agent": self.white_agent.__class__.__name__,
             "black_agent": self.black_agent.__class__.__name__,
         }
@@ -186,7 +186,7 @@ class YinshGame:
         policy_probs = np.zeros(config.POLICY_OUTPUT_SIZE)
         
         try:
-            action_index = self.action_mapper.action_to_index(action)
+            action_index = self.action_mapper.get_action_index(action)
             if action_index is not None and action_index < config.POLICY_OUTPUT_SIZE:
                 policy_probs[action_index] = 1.0
         except:
@@ -249,7 +249,7 @@ class YinshGame:
         print("Current board state:")
         print(f"Phase: {self.env.phase}")
         print(f"Current Player: {self.env.current_player}")
-        print(f"Removed Rings - White: {self.env.removed_rings[Color.WHITE]}, Black: {self.env.removed_rings[Color.BLACK]}")
+        print(f"Removed Rings - White: {self.env.rings_removed[Color.WHITE]}, Black: {self.env.rings_removed[Color.BLACK]}")
 
 
 def create_yinsh_game(

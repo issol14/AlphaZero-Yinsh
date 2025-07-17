@@ -132,7 +132,7 @@ class YinshAgent:
         valid_indices = []
         for action in valid_actions:
             try:
-                idx = self.action_mapper.action_to_index(action)
+                idx = self.action_mapper.get_action_index(action)
                 if idx is not None:
                     valid_indices.append(idx)
             except:
