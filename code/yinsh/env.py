@@ -19,6 +19,12 @@ class PieceType(Enum):
     EMPTY = "EMPTY"
 
 
+class GamePhase(Enum):
+    PLACE_RINGS = "PLACE_RINGS"
+    MAIN_GAME = "MAIN_GAME"
+    LINE_REMOVAL = "LINE_REMOVAL"  # 새로 추가
+
+
 class YinshAction:
     def __init__(
         self,
@@ -26,13 +32,17 @@ class YinshAction:
         from_pos: Optional[Tuple[int, int]] = None,
         to_pos: Optional[Tuple[int, int]] = None,
         remove_positions: Optional[List[Tuple[int, int]]] = None,
+        remove_line_positions: Optional[List[Tuple[int, int]]] = None,  # 추가
+        remove_ring_position: Optional[Tuple[int, int]] = None,  # 추가
     ):
         self.action_type = (
-            action_type  # "PLACE_RING", "MOVE_RING", "REMOVE_MARKERS", "REMOVE_RING"
+            action_type  # "PLACE_RING", "MOVE_RING", "REMOVE_MARKERS", "REMOVE_RING", "REMOVE_LINE"
         )
         self.from_pos = from_pos
         self.to_pos = to_pos
         self.remove_positions = remove_positions or []
+        self.remove_line_positions = remove_line_positions or []  # 추가
+        self.remove_ring_position = remove_ring_position  # 추가
 
     def __str__(self):
         if self.action_type == "PLACE_RING":
@@ -43,11 +53,15 @@ class YinshAction:
             return f"REMOVE_MARKERS({self.remove_positions})"
         elif self.action_type == "REMOVE_RING":
             return f"REMOVE_RING({self.to_pos})"
+        elif self.action_type == "REMOVE_LINE":
+            return f"REMOVE_LINE(markers={self.remove_line_positions}, ring={self.remove_ring_position})"
         return f"{self.action_type}"
 
     def __hash__(self):
         return hash(
-            (self.action_type, self.from_pos, self.to_pos, tuple(self.remove_positions))
+            (self.action_type, self.from_pos, self.to_pos, 
+             tuple(self.remove_positions), tuple(self.remove_line_positions), 
+             self.remove_ring_position)
         )
 
     def __eq__(self, other):
@@ -58,6 +72,8 @@ class YinshAction:
             and self.from_pos == other.from_pos
             and self.to_pos == other.to_pos
             and self.remove_positions == other.remove_positions
+            and self.remove_line_positions == other.remove_line_positions
+            and self.remove_ring_position == other.remove_ring_position
         )
 
 
@@ -162,11 +178,19 @@ class YinshEnv:
         self.marker_positions = {Color.WHITE: set(), Color.BLACK: set()}
 
         self.current_player = Color.WHITE
-        self.phase = "PLACE_RINGS"  # "PLACE_RINGS", "MAIN_GAME"
+        self.phase = GamePhase.PLACE_RINGS  # GamePhase enum 사용
         self.rings_placed = {Color.WHITE: 0, Color.BLACK: 0}
         self.rings_removed = {Color.WHITE: 0, Color.BLACK: 0}
         self.done = False
         self.winner = None
+
+        # 마커 풀 관리 (새로 추가)
+        self.markers_in_pool = config.TOTAL_MARKERS  # 사용 가능한 마커 수
+        self.markers_on_board = 0  # 보드 위 마커 수
+
+        # 라인 제거 시스템 (새로 추가)
+        self.pending_line_removals = []  # 제거 대기 중인 라인들
+        self.line_removal_player = None  # 라인을 제거해야 하는 플레이어
 
         self.game_history = []
         self.move_count = 0
@@ -210,36 +234,83 @@ class YinshEnv:
         """해당 위치에 마커가 있는지 확인 (색깔 무관)"""
         return any(pos in marker_set for marker_set in self.marker_positions.values())
 
+    def _place_marker(self, pos: Tuple[int, int], color: Color) -> bool:
+        """마커 배치 (풀에서 가져오기)"""
+        if self.markers_in_pool <= 0:
+            return False
+        self.markers_in_pool -= 1
+        self.markers_on_board += 1
+        self.marker_positions[color].add(pos)
+        return True
+    
+    def _remove_markers(self, positions: List[Tuple[int, int]], color: Color):
+        """마커들을 제거하고 풀로 반환"""
+        for pos in positions:
+            if pos in self.marker_positions[color]:
+                self.marker_positions[color].remove(pos)
+        self.markers_in_pool += len(positions)
+        self.markers_on_board -= len(positions)
+
+    def _is_valid_hex_direction(self, dx: int, dy: int) -> bool:
+        """육각형 보드의 유효한 6방향인지 확인"""
+        if dx == 0 and dy == 0:
+            return False
+            
+        # 방향 벡터 정규화
+        gcd = abs(dx) if dy == 0 else abs(dy) if dx == 0 else min(abs(dx), abs(dy))
+        if gcd == 0:
+            return False
+            
+        norm_dx = dx // gcd if dx != 0 else 0
+        norm_dy = dy // gcd if dy != 0 else 0
+        
+        return (norm_dx, norm_dy) in config.VALID_HEX_DIRECTIONS
+
     def get_valid_actions(self) -> List[YinshAction]:
         """현재 상태에서 유효한 액션들을 반환"""
         actions = []
 
-        if self.phase == "PLACE_RINGS":
+        if self.phase == GamePhase.PLACE_RINGS:
             # 링 배치 단계 - 마커가 있는 곳에는 링을 둘 수 없음
             for x in range(self.board_size):
                 for y in range(self.board_size):
                     pos = (x, y)
                     if self.is_empty_position(pos) and not self._has_marker_at(pos):
                         actions.append(YinshAction("PLACE_RING", to_pos=pos))
-        else:
-            # 메인 게임 단계
+        
+        elif self.phase == GamePhase.LINE_REMOVAL:
+            # 라인 제거 액션들
+            if self.pending_line_removals:
+                line = self.pending_line_removals[0]
+                # 5개 연속 라인에서 가능한 5개 조합들 생성
+                if len(line) >= config.LINE_LENGTH_TO_WIN:
+                    for i in range(len(line) - config.LINE_LENGTH_TO_WIN + 1):
+                        remove_positions = line[i:i+config.LINE_LENGTH_TO_WIN]
+                        # 제거할 링 선택
+                        for ring_pos in self.ring_positions[self.current_player]:
+                            actions.append(YinshAction(
+                                "REMOVE_LINE",
+                                remove_line_positions=remove_positions,
+                                remove_ring_position=ring_pos
+                            ))
+        
+        elif self.phase == GamePhase.MAIN_GAME:
+            # 메인 게임 단계 - 링 이동
             for ring_pos in self.ring_positions[self.current_player]:
-                for x in range(self.board_size):
-                    for y in range(self.board_size):
-                        to_pos = (x, y)
-                        if self.is_valid_ring_move(ring_pos, to_pos):
-                            actions.append(
-                                YinshAction(
-                                    "MOVE_RING", from_pos=ring_pos, to_pos=to_pos
-                                )
-                            )
+                valid_moves = self.get_valid_ring_moves(ring_pos)
+                for to_pos in valid_moves:
+                    actions.append(YinshAction(
+                        "MOVE_RING", 
+                        from_pos=ring_pos, 
+                        to_pos=to_pos
+                    ))
 
         return actions
 
     def is_valid_ring_move(
         self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]
     ) -> bool:
-        """링 이동이 유효한지 확인 (YINSH 규칙)"""
+        """링 이동이 유효한지 확인 (YINSH 규칙) - 수정된 버전"""
         if not self.is_valid_position(to_pos) or not self.is_empty_position(to_pos):
             return False
 
@@ -250,41 +321,66 @@ class YinshEnv:
         if dx == 0 and dy == 0:
             return False
 
-        # 6방향 (수평, 수직, 대각선) 체크
-        if not (dx == 0 or dy == 0 or abs(dx) == abs(dy)):
+        # 올바른 6방향 체크 (수정됨)
+        if not self._is_valid_hex_direction(dx, dy):
             return False
 
-        # YINSH 이동 규칙 체크
-        steps = max(abs(dx), abs(dy))
-        step_x = 0 if dx == 0 else dx // abs(dx)
-        step_y = 0 if dy == 0 else dy // abs(dy)
+        # YINSH 이동 규칙 체크는 _find_landing_position에서 처리
+        return to_pos in self.get_valid_ring_moves(from_pos)
 
-        # 경로상의 장애물 체크
-        for i in range(1, steps):
-            check_pos = (from_pos[0] + i * step_x, from_pos[1] + i * step_y)
-
-            if not self.is_valid_position(check_pos):
-                return False
-
-            # 링이 있으면 그 위치까지만 이동 가능
-            if any(check_pos in ring_set for ring_set in self.ring_positions.values()):
-                # 링이 있는 위치까지만 이동 가능한지 확인
-                if check_pos != to_pos:
-                    return False
+    def _find_landing_position(self, from_pos: Tuple[int, int], direction: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """주어진 방향으로 링이 착지할 수 있는 위치들 찾기"""
+        dx, dy = direction
+        landing_positions = []
+        current_pos = from_pos
+        
+        # 1단계: 연속된 빈 공간들 건너뛰기
+        while True:
+            next_pos = (current_pos[0] + dx, current_pos[1] + dy)
+            
+            if not self.is_valid_position(next_pos):
                 break
+                
+            # 링이 있으면 건너뛸 수 없음
+            if any(next_pos in ring_set for ring_set in self.ring_positions.values()):
+                break
+                
+            # 마커가 있으면 마커 구간 시작
+            if any(next_pos in marker_set for marker_set in self.marker_positions.values()):
+                break
+                
+            # 빈 공간이면 착지 가능하고 계속 진행
+            landing_positions.append(next_pos)
+            current_pos = next_pos
+        
+        # 2단계: 마커들 건너뛰기
+        marker_start = (current_pos[0] + dx, current_pos[1] + dy)
+        if (self.is_valid_position(marker_start) and 
+            any(marker_start in marker_set for marker_set in self.marker_positions.values())):
+            
+            # 연속된 마커들을 모두 건너뛰기
+            current_pos = marker_start
+            while (self.is_valid_position(current_pos) and 
+                   any(current_pos in marker_set for marker_set in self.marker_positions.values())):
+                current_pos = (current_pos[0] + dx, current_pos[1] + dy)
+            
+            # 마커 다음 첫 번째 빈 공간에 착지
+            if (self.is_valid_position(current_pos) and 
+                self.is_empty_position(current_pos)):
+                landing_positions.append(current_pos)
+        
+        return landing_positions
 
-            # 마커가 있으면 그 다음 칸까지 이동 가능
-            if any(
-                check_pos in marker_set for marker_set in self.marker_positions.values()
-            ):
-                # 마커가 있는 칸에 링을 둘 수 없음
-                if check_pos == to_pos:
-                    return False
-                # 마커 다음 칸까지만 이동 가능
-                if i == steps - 1:  # 마지막 칸이 마커 다음 칸이 아니면
-                    return False
-
-        return True
+    def get_valid_ring_moves(self, ring_pos: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """해당 링이 이동할 수 있는 모든 위치들 반환"""
+        valid_moves = []
+        
+        # 6방향으로 체크
+        for direction in config.VALID_HEX_DIRECTIONS:
+            landing_positions = self._find_landing_position(ring_pos, direction)
+            valid_moves.extend(landing_positions)
+            
+        return valid_moves
 
     def step(self, action: YinshAction) -> bool:
         """액션을 실행하고 게임 상태를 업데이트"""
@@ -295,6 +391,8 @@ class YinshEnv:
             self._place_ring(action.to_pos)
         elif action.action_type == "MOVE_RING":
             self._move_ring(action.from_pos, action.to_pos)
+        elif action.action_type == "REMOVE_LINE":
+            self._remove_line_and_ring(action.remove_line_positions, action.remove_ring_position)
 
         self.game_history.append(action)
         self.move_count += 1
@@ -302,11 +400,18 @@ class YinshEnv:
         # 게임 종료 조건 확인
         self._check_game_end()
 
-        # 플레이어 교체
+        # 플레이어 교체 (수정된 로직)
         if not self.done:
-            self.current_player = (
-                Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
-            )
+            if self.phase == GamePhase.LINE_REMOVAL:
+                # 라인 제거 완료 후 원래 게임으로 복귀하고 다른 색 라인도 체크
+                self.phase = GamePhase.MAIN_GAME
+                self._check_for_remaining_lines()
+                # 라인 제거 후에는 플레이어 변경하지 않음 (같은 플레이어 계속)
+            else:
+                # 일반적인 플레이어 교체
+                self.current_player = (
+                    Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
+                )
 
         return True
 
@@ -322,10 +427,10 @@ class YinshEnv:
             self.rings_placed[Color.WHITE] == config.RINGS_PER_PLAYER
             and self.rings_placed[Color.BLACK] == config.RINGS_PER_PLAYER
         ):
-            self.phase = "MAIN_GAME"
+            self.phase = GamePhase.MAIN_GAME
 
     def _move_ring(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]):
-        """링을 이동하고 경로상의 마커들을 뒤집음"""
+        """링을 이동하고 경로상의 마커들을 뒤집음 (수정된 버전)"""
         # 링 이동
         x_from, y_from = from_pos
         x_to, y_to = to_pos
@@ -336,14 +441,82 @@ class YinshEnv:
         self.ring_positions[self.current_player].remove(from_pos)
         self.ring_positions[self.current_player].add(to_pos)
 
-        # 시작 위치에 마커 배치
-        self.marker_positions[self.current_player].add(from_pos)
+        # 시작 위치에 마커 배치 (마커 풀 관리)
+        if not self._place_marker(from_pos, self.current_player):
+            # 마커 부족 시 게임 종료 처리
+            self._handle_marker_exhaustion()
+            return
 
         # 경로상의 마커들 뒤집기
         self._flip_markers_on_path(from_pos, to_pos)
 
-        # 라인 완성 체크
-        self._check_and_remove_lines()
+        # 5연속 라인 체크 (새로운 시스템)
+        self._check_for_lines_and_handle()
+
+    def _check_for_lines_and_handle(self):
+        """5연속 라인 체크 및 처리 순서 관리"""
+        white_lines = self._find_lines(Color.WHITE)
+        black_lines = self._find_lines(Color.BLACK)
+        
+        # 양쪽 모두 5연속이 생겼을 때
+        if white_lines and black_lines:
+            # 방금 움직인 플레이어부터 처리
+            if self.current_player == Color.WHITE:
+                self._initiate_line_removal(Color.WHITE, white_lines[0])
+            else:
+                self._initiate_line_removal(Color.BLACK, black_lines[0])
+        # 한쪽만 5연속
+        elif white_lines:
+            self._initiate_line_removal(Color.WHITE, white_lines[0])
+        elif black_lines:
+            self._initiate_line_removal(Color.BLACK, black_lines[0])
+
+    def _initiate_line_removal(self, color: Color, line: List[Tuple[int, int]]):
+        """라인 제거 프로세스 시작"""
+        self.phase = GamePhase.LINE_REMOVAL
+        self.line_removal_player = color
+        self.pending_line_removals = [line]
+        # 현재 플레이어를 라인 제거해야 하는 플레이어로 변경
+        self.current_player = color
+
+    def _handle_marker_exhaustion(self):
+        """마커 51개 소진 시 처리"""
+        self.done = True
+        
+        # 제거한 링 개수로 승자 결정
+        white_removed = self.rings_removed[Color.WHITE]
+        black_removed = self.rings_removed[Color.BLACK]
+        
+        if white_removed > black_removed:
+            self.winner = Color.WHITE
+        elif black_removed > white_removed:
+            self.winner = Color.BLACK
+        else:
+            self.winner = None  # 무승부
+
+    def _remove_line_and_ring(self, remove_positions: List[Tuple[int, int]], remove_ring_position: Optional[Tuple[int, int]]):
+        """라인을 제거하고 해당 링을 제거"""
+        # 라인 제거
+        for pos in remove_positions:
+            if pos in self.marker_positions[self.current_player]:
+                self.marker_positions[self.current_player].remove(pos)
+
+        # 링 제거
+        if remove_ring_position and remove_ring_position in self.ring_positions[self.current_player]:
+            self.ring_positions[self.current_player].remove(remove_ring_position)
+            x, y = remove_ring_position
+            self.board[x, y] = 0
+            self.rings_removed[self.current_player] += 1
+
+    def _check_for_remaining_lines(self):
+        """라인 제거 후에도 남아있는 라인이 있는지 확인"""
+        for color in [Color.WHITE, Color.BLACK]:
+            lines = self._find_lines(color)
+            if lines:
+                # 라인이 남아있으면 다시 라인 제거 단계로 전환
+                self.phase = GamePhase.LINE_REMOVAL
+                self.line_removal_player = color
+                break
 
     def _flip_markers_on_path(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]):
         """링 이동 경로상의 마커들을 뒤집음"""
@@ -368,34 +541,14 @@ class YinshEnv:
                     self.marker_positions[other_color].add(check_pos)
                     break
 
-    def _check_and_remove_lines(self):
-        """5개 연속 라인이 있는지 체크하고 제거"""
-        for color in [Color.WHITE, Color.BLACK]:
-            lines = self._find_lines(color)
-            if lines:
-                # 첫 번째 라인 제거 (간단화)
-                line = lines[0]
-                for pos in line:
-                    self.marker_positions[color].remove(pos)
-
-                # 링 제거 (플레이어가 선택해야 하지만 간단화)
-                if self.ring_positions[color]:
-                    ring_to_remove = list(self.ring_positions[color])[0]
-                    self.ring_positions[color].remove(ring_to_remove)
-                    x, y = ring_to_remove
-                    self.board[x, y] = 0
-                    self.rings_removed[color] += 1
-
     def _find_lines(self, color: Color) -> List[List[Tuple[int, int]]]:
-        """해당 색깔의 5개 연속 라인을 찾음"""
+        """해당 색깔의 5개 연속 라인을 찾음 (수정된 버전)"""
         lines = []
         markers = self.marker_positions[color]
 
-        # 6방향으로 라인 체크
-        directions = [(1, 0), (0, 1), (1, 1), (1, -1), (-1, 1), (-1, 0)]
-
+        # 올바른 6방향
         for start_pos in markers:
-            for dx, dy in directions:
+            for dx, dy in config.VALID_HEX_DIRECTIONS:
                 line = [start_pos]
                 current_pos = start_pos
 
@@ -409,26 +562,37 @@ class YinshEnv:
                         break
 
                 if len(line) >= config.LINE_LENGTH_TO_WIN:
-                    lines.append(line[: config.LINE_LENGTH_TO_WIN])
+                    lines.append(line[:config.LINE_LENGTH_TO_WIN])
 
         return lines
 
     def _check_game_end(self):
-        """게임 종료 조건 체크"""
+        """게임 종료 조건 체크 (완전한 버전)"""
+        # 1. 링 3개 제거 조건
         if self.rings_removed[Color.WHITE] >= config.RINGS_TO_WIN:
             self.done = True
             self.winner = Color.WHITE
+            return
         elif self.rings_removed[Color.BLACK] >= config.RINGS_TO_WIN:
             self.done = True
             self.winner = Color.BLACK
-        elif self.move_count >= config.MAX_GAME_MOVES:
+            return
+        
+        # 2. 마커 소진 조건
+        if self.markers_in_pool <= 0:
+            self._handle_marker_exhaustion()
+            return
+        
+        # 3. 최대 이동 수 초과 (무승부)
+        if self.move_count >= config.MAX_GAME_MOVES:
             self.done = True
-            self.winner = None  # 무승부
+            self.winner = None
+            return
 
     def is_game_over(self) -> bool:
         """게임 종료 조건 확인"""
         # 링 배치 단계에서는 게임이 종료될 수 없음
-        if "RING_PLACE" in self.get_turn_state():
+        if self.phase == GamePhase.PLACE_RINGS:
             return False
 
         # 링 이동 단계 이후에만 승리 조건 확인
@@ -436,27 +600,23 @@ class YinshEnv:
             return True
         if self.rings_removed[Color.BLACK] >= config.RINGS_TO_WIN:
             return True
+        
+        # 마커 소진 조건
+        if self.markers_in_pool <= 0:
+            return True
 
-        return False
+        return self.done
 
     def get_winner(self) -> Optional[Color]:
-        """승자 반환"""
+        """승자 반환 (수정된 버전)"""
         if not self.is_game_over():
             return None
 
-        white_rings = sum(1 for pos in self.ring_positions[Color.WHITE] if pos)
-        black_rings = sum(1 for pos in self.ring_positions[Color.BLACK] if pos)
-
-        if white_rings <= 2:
-            return Color.BLACK  # 백이 링을 3개 제거당했으므로 흑 승리
-        elif black_rings <= 2:
-            return Color.WHITE  # 흑이 링을 3개 제거당했으므로 백 승리
-
-        return None  # 무승부 (이론적으로 발생하지 않음)
+        return self.winner  # _check_game_end에서 이미 설정됨
 
     def get_state_tensor(self) -> np.ndarray:
-        """현재 상태를 신경망 입력용 텐서로 변환"""
-        state = np.zeros((11, self.board_size, self.board_size), dtype=np.float32)
+        """현재 상태를 신경망 입력용 텐서로 변환 (확장된 버전)"""
+        state = np.zeros((13, self.board_size, self.board_size), dtype=np.float32)  # 11->13 채널로 확장
 
         # 채널 0-1: 현재 플레이어의 링과 마커
         current_color = self.current_player
@@ -479,8 +639,13 @@ class YinshEnv:
         # 채널 4: 현재 플레이어 (전체 보드에 색칠)
         state[4, :, :] = 1.0 if current_color == Color.WHITE else 0.0
 
-        # 채널 5: 게임 단계
-        state[5, :, :] = 1.0 if self.phase == "PLACE_RINGS" else 0.0
+        # 채널 5: 게임 단계 (수정됨)
+        phase_encoding = {
+            GamePhase.PLACE_RINGS: 0.0,
+            GamePhase.MAIN_GAME: 0.5,
+            GamePhase.LINE_REMOVAL: 1.0
+        }
+        state[5, :, :] = phase_encoding[self.phase]
 
         # 채널 6-7: 각 플레이어가 배치한 링 개수
         state[6, :, :] = self.rings_placed[Color.WHITE] / config.RINGS_PER_PLAYER
@@ -490,16 +655,22 @@ class YinshEnv:
         state[8, :, :] = self.rings_removed[Color.WHITE] / config.RINGS_TO_WIN
         state[9, :, :] = self.rings_removed[Color.BLACK] / config.RINGS_TO_WIN
 
-        # 채널 10: 유효한 보드 위치
+        # 채널 10: 마커 풀 상태 (새로 추가)
+        state[10, :, :] = self.markers_in_pool / config.TOTAL_MARKERS
+
+        # 채널 11: 보드 위 마커 수 (새로 추가)
+        state[11, :, :] = self.markers_on_board / config.TOTAL_MARKERS
+
+        # 채널 12: 유효한 보드 위치
         for x in range(self.board_size):
             for y in range(self.board_size):
                 if self.is_valid_position((x, y)):
-                    state[10, x, y] = 1.0
+                    state[12, x, y] = 1.0
 
         return state
 
     def get_state_string(self) -> str:
-        """상태를 문자열로 변환 (해싱용)"""
+        """상태를 문자열로 변환 (해싱용) - 확장된 버전"""
         return str(
             {
                 "rings_white": sorted(list(self.ring_positions[Color.WHITE])),
@@ -507,14 +678,18 @@ class YinshEnv:
                 "markers_white": sorted(list(self.marker_positions[Color.WHITE])),
                 "markers_black": sorted(list(self.marker_positions[Color.BLACK])),
                 "current_player": self.current_player.value,
-                "phase": self.phase,
+                "phase": self.phase.value,  # GamePhase enum
                 "rings_placed": dict(self.rings_placed),
                 "rings_removed": dict(self.rings_removed),
+                "markers_in_pool": self.markers_in_pool,  # 새로 추가
+                "markers_on_board": self.markers_on_board,  # 새로 추가
+                "pending_line_removals": self.pending_line_removals,  # 새로 추가
+                "line_removal_player": self.line_removal_player.value if self.line_removal_player else None,  # 새로 추가
             }
         )
 
     def copy(self):
-        """환경의 깊은 복사본을 생성"""
+        """환경의 깊은 복사본을 생성 (확장된 버전)"""
         new_env = YinshEnv()
         new_env.board = self.board.copy()
         new_env.ring_positions = {
@@ -531,24 +706,33 @@ class YinshEnv:
         new_env.rings_removed = self.rings_removed.copy()
         new_env.done = self.done
         new_env.winner = self.winner
+        
+        # 새로 추가된 필드들
+        new_env.markers_in_pool = self.markers_in_pool
+        new_env.markers_on_board = self.markers_on_board
+        new_env.pending_line_removals = self.pending_line_removals.copy()
+        new_env.line_removal_player = self.line_removal_player
+        
         new_env.game_history = self.game_history.copy()
         new_env.move_count = self.move_count
         return new_env
 
     def get_turn_state(self) -> str:
-        """현재 턴 상태 반환 (YINSH_TURN_PROCESSING.md 참고)"""
-        # 간단한 구현: 링 배치 단계 -> 링 이동 단계
-        white_rings = sum(1 for pos in self.ring_positions[Color.WHITE] if pos)
-        black_rings = sum(1 for pos in self.ring_positions[Color.BLACK] if pos)
-
-        if white_rings < 5 or black_rings < 5:
+        """현재 턴 상태 반환 (확장된 버전)"""
+        if self.phase == GamePhase.PLACE_RINGS:
             # 링 배치 단계
             if self.current_player == Color.WHITE:
                 return "WHITE_RING_PLACE"
             else:
                 return "BLACK_RING_PLACE"
+        elif self.phase == GamePhase.LINE_REMOVAL:
+            # 라인 제거 단계
+            if self.current_player == Color.WHITE:
+                return "WHITE_LINE_REMOVAL"
+            else:
+                return "BLACK_LINE_REMOVAL"
         else:
-            # 링 이동 단계
+            # 링 이동 단계 (메인 게임)
             if self.current_player == Color.WHITE:
                 return "WHITE_RING_MOVE"
             else:

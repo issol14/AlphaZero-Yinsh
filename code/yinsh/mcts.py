@@ -6,8 +6,9 @@ from typing import Dict, List, Tuple, Optional
 import math
 import time
 
-from .env import YinshEnv, YinshAction, Color
+from .env import YinshEnv, YinshAction, Color, GamePhase
 from .node import YinshNode
+from .mapper import YinshActionMapper
 from . import config
 
 
@@ -24,6 +25,9 @@ class MCTS:
         self.neural_network = neural_network
         self.c_puct = c_puct
         self.num_simulations = num_simulations
+        
+        # 액션 매퍼 초기화
+        self.action_mapper = YinshActionMapper()
 
         # 통계
         self.nodes_expanded = 0
@@ -74,11 +78,12 @@ class MCTS:
                 # 터미널 노드인 경우
                 if current_env.is_game_over():
                     winner = current_env.get_winner()
-                    value = (
-                        1.0
-                        if winner == Color.WHITE
-                        else -1.0 if winner == Color.BLACK else 0.0
-                    )
+                    if winner == Color.WHITE:
+                        value = 1.0 if current_env.current_player == Color.WHITE else -1.0
+                    elif winner == Color.BLACK:
+                        value = 1.0 if current_env.current_player == Color.BLACK else -1.0
+                    else:
+                        value = 0.0  # 무승부
                 else:
                     value = self._evaluate_with_neural_network(
                         current_env.get_state_tensor()
@@ -97,7 +102,7 @@ class MCTS:
                 "nodes_expanded": self.nodes_expanded,
                 "cache_hits": self.cache_hits,
                 "search_time": search_time,
-                "simulations_per_second": self.num_simulations / search_time,
+                "simulations_per_second": self.num_simulations / search_time if search_time > 0 else 0,
             }
         )
 
@@ -170,12 +175,15 @@ class MCTS:
             # 자식 노드 생성
             child = YinshNode(new_env, node, action)
 
-            # 사전 확률 설정 (액션 매핑 필요)
-            action_index = self._action_to_index(action)
-            if action_index is not None and action_index < len(policy_probs):
-                child.prior = policy_probs[action_index]
-            else:
-                child.prior = 1.0 / len(valid_actions)  # 균등 분포
+            # 사전 확률 설정 (액션 매핑 사용)
+            try:
+                action_index = self.action_mapper.action_to_index(action)
+                if action_index is not None and action_index < len(policy_probs):
+                    child.prior = policy_probs[action_index]
+                else:
+                    child.prior = 1.0 / len(valid_actions)  # 균등 분포
+            except Exception:
+                child.prior = 1.0 / len(valid_actions)  # 안전 장치
 
             node.children[action] = child
 
@@ -184,13 +192,13 @@ class MCTS:
         self.nodes_expanded += 1
 
     def _evaluate_with_neural_network(
-        self, state_tensor: torch.Tensor
+        self, state_tensor: np.ndarray
     ) -> Tuple[np.ndarray, float]:
         """
         신경망으로 정책과 가치 평가
 
         Returns:
-            policy_probs: 액션 확률 분포 (200,)
+            policy_probs: 액션 확률 분포 (4000,)
             value: 위치 평가값 (-1 ~ +1)
         """
         self.neural_network.eval()
@@ -231,11 +239,10 @@ class MCTS:
         while current is not None:
             current.visit_count += 1
 
-            # 가치 업데이트 (미니맥스 방식)
+            # 가치 업데이트 (방문 횟수 가중 평균)
             if current.value is None:
                 current.value = value
             else:
-                # 방문 횟수 가중 평균
                 current.value = (
                     current.value * (current.visit_count - 1) + value
                 ) / current.visit_count
@@ -314,12 +321,6 @@ class MCTS:
         )
 
         return {action: prob for action, prob in zip(actions, probs)}
-
-    def _action_to_index(self, action: YinshAction) -> Optional[int]:
-        """액션을 인덱스로 변환 (간단한 구현)"""
-        # 실제로는 mapper를 사용해야 함
-        # 여기서는 간단한 해시 기반 매핑
-        return hash(action) % config.POLICY_OUTPUT_SIZE
 
 
 class MCTSAgent:

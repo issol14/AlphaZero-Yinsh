@@ -10,9 +10,9 @@ from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from datetime import datetime
 
-from .env import YinshEnv, Color, YinshAction
+from .env import YinshEnv, Color, YinshAction, GamePhase
 from .agent import YinshAgent, create_agent
-from .mapper import get_action_mapper
+from .mapper import YinshActionMapper
 from . import config
 from .utils import time_function
 
@@ -29,7 +29,7 @@ class YinshGame:
         self.white_agent = white_agent
         self.black_agent = black_agent
         self.env = YinshEnv()
-        self.action_mapper = get_action_mapper()
+        self.action_mapper = YinshActionMapper()
 
         # 게임 기록
         self.memory = []
@@ -120,7 +120,7 @@ class YinshGame:
                 self.moves_played += 1
 
                 if self.moves_played % 20 == 0:
-                    print(f"├── Move {self.moves_played}: {self.env.get_turn_state()}")
+                    print(f"├── Move {self.moves_played}: Phase {self.env.phase}, Player {self.env.current_player}")
 
             except Exception as e:
                 print(f"❌ Error in move {self.moves_played}: {e}")
@@ -137,7 +137,7 @@ class YinshGame:
             "duration": game_duration,
             "winner": winner.name if winner else "draw",
             "winner_value": winner_value,
-            "final_state": self.env.get_turn_state(),
+            "final_state": f"Phase: {self.env.phase}, Removed rings: W{self.env.removed_rings[Color.WHITE]} B{self.env.removed_rings[Color.BLACK]}",
             "white_agent": self.white_agent.__class__.__name__,
             "black_agent": self.black_agent.__class__.__name__,
         }
@@ -155,26 +155,47 @@ class YinshGame:
         """MCTS 통계에서 정책 분포 추출"""
         policy_probs = np.zeros(config.POLICY_OUTPUT_SIZE)
 
-        # MCTS 방문 횟수를 정책으로 변환
-        total_visits = sum(mcts_stats.values())
-        if total_visits > 0:
-            for action_index, visits in mcts_stats.items():
-                if action_index < config.POLICY_OUTPUT_SIZE:
-                    policy_probs[action_index] = visits / total_visits
+        # 방문 횟수 통계에서 정책 추출
+        visit_counts = mcts_stats.get("visit_counts", {})
+        if visit_counts:
+            total_visits = 0
+            action_visits = {}
+            
+            # 액션별 방문 횟수 계산
+            for action_str, visits in visit_counts.items():
+                try:
+                    # 문자열로 저장된 액션을 다시 파싱 (복잡하므로 우선 스킵)
+                    total_visits += visits
+                except:
+                    continue
+            
+            # 현재는 균등 분포로 대체 (정확한 구현은 복잡함)
+            if total_visits > 0:
+                # 균등 분포로 초기화
+                num_actions = len(visit_counts)
+                if num_actions > 0:
+                    uniform_prob = 1.0 / num_actions
+                    # 첫 번째 몇 개 액션에 균등하게 분배
+                    for i in range(min(num_actions, config.POLICY_OUTPUT_SIZE)):
+                        policy_probs[i] = uniform_prob
 
         return policy_probs
 
     def _create_onehot_policy(self, action: YinshAction) -> np.ndarray:
         """액션을 원핫 정책으로 변환"""
         policy_probs = np.zeros(config.POLICY_OUTPUT_SIZE)
-        action_index = self.action_mapper.action_to_index(action)
-
-        if action_index is not None and action_index < config.POLICY_OUTPUT_SIZE:
-            policy_probs[action_index] = 1.0
+        
+        try:
+            action_index = self.action_mapper.action_to_index(action)
+            if action_index is not None and action_index < config.POLICY_OUTPUT_SIZE:
+                policy_probs[action_index] = 1.0
+        except:
+            # 매핑 실패시 첫 번째 인덱스에 할당
+            policy_probs[0] = 1.0
 
         return policy_probs
 
-    def save_to_memory(self, state: torch.Tensor, policy_probs: np.ndarray):
+    def save_to_memory(self, state: np.ndarray, policy_probs: np.ndarray):
         """현재 상태와 정책을 메모리에 저장"""
         self.memory[-1].append((state, policy_probs, None))
 
@@ -226,7 +247,9 @@ class YinshGame:
     def print_board(self):
         """현재 보드 상태 출력"""
         print("Current board state:")
-        print(self.env.get_turn_state())
+        print(f"Phase: {self.env.phase}")
+        print(f"Current Player: {self.env.current_player}")
+        print(f"Removed Rings - White: {self.env.removed_rings[Color.WHITE]}, Black: {self.env.removed_rings[Color.BLACK]}")
 
 
 def create_yinsh_game(

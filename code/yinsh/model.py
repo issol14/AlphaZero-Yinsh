@@ -32,11 +32,11 @@ class YinshNet(nn.Module):
 
     def __init__(
         self,
-        input_channels: int = 11,
+        input_channels: int = 13,  # 11 -> 13으로 확장
         board_size: int = 11,
         num_res_blocks: int = 5,
         num_filters: int = 64,
-        policy_output_dim: int = 200,
+        policy_output_dim: int = 4000,
     ):
         super(YinshNet, self).__init__()
 
@@ -70,10 +70,10 @@ class YinshNet(nn.Module):
         Forward pass
 
         Args:
-            x: (batch_size, 11, 11, 11) - YINSH 게임 상태 텐서
+            x: (batch_size, 13, 11, 11) - YINSH 게임 상태 텐서
 
         Returns:
-            policy_logits: (batch_size, 200) - 액션 확률 분포 (log softmax)
+            policy_logits: (batch_size, 4000) - 액션 확률 분포 (log softmax)
             value: (batch_size, 1) - 위치 평가값 (-1 ~ +1)
         """
         # 백본 네트워크
@@ -98,10 +98,10 @@ class YinshNet(nn.Module):
         단일 상태에 대한 예측
 
         Args:
-            state_tensor: (11, 11, 11) 또는 (1, 11, 11, 11) - NumPy 배열 또는 PyTorch 텐서
+            state_tensor: (13, 11, 11) 또는 (1, 13, 11, 11) - NumPy 배열 또는 PyTorch 텐서
 
         Returns:
-            policy_probs: (200,) - 액션 확률 분포
+            policy_probs: (4000,) - 액션 확률 분포
             value: float - 위치 평가값
         """
         self.eval()
@@ -115,6 +115,10 @@ class YinshNet(nn.Module):
             # 배치 차원 추가
             if len(state_tensor.shape) == 3:
                 state_tensor = state_tensor.unsqueeze(0)
+            
+            # 모델과 같은 디바이스로 이동
+            device = next(self.parameters()).device
+            state_tensor = state_tensor.to(device)
 
             policy_logits, value = self.forward(state_tensor)
             policy_probs = torch.exp(policy_logits).squeeze().cpu().numpy()
@@ -133,7 +137,7 @@ class YinshModelBuilder:
     def build_model(self) -> YinshNet:
         """새로운 YINSH 모델 생성"""
         model = YinshNet(
-            input_channels=11,  # YINSH 채널 수
+            input_channels=13,  # 확장된 채널 수
             board_size=config.BOARD_SIZE,
             num_res_blocks=config.AMOUNT_OF_RESIDUAL_BLOCKS,
             num_filters=config.CONVOLUTION_FILTERS,
@@ -213,4 +217,6 @@ CHANNEL_DESCRIPTIONS = {
     8: "현재 플레이어 (white=+1, black=-1)",
     9: "흰 플레이어 회수 링 수 (0~3)",
     10: "검 플레이어 회수 링 수 (0~3)",
+    11: "흰 마커 풀 잔여 개수 (정규화)",
+    12: "검은 마커 풀 잔여 개수 (정규화)",
 }

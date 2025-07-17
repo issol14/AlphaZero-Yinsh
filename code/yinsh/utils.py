@@ -43,16 +43,18 @@ def save_state_to_image(state_tensor: torch.Tensor, path: str, name: str = "stat
 
     channel_names = [
         "White Rings",
+        "Black Rings", 
         "White Markers",
-        "Black Rings",
         "Black Markers",
-        "Current Player",
-        "Game Phase",
-        "White Rings Placed",
-        "Black Rings Placed",
-        "White Rings Removed",
-        "Black Rings Removed",
         "Valid Positions",
+        "White Removable Markers",
+        "Black Removable Markers",
+        "Game Phase",
+        "Current Player",
+        "White Removed Rings",
+        "Black Removed Rings",
+        "White Marker Pool",
+        "Black Marker Pool",
     ]
 
     for i in range(min(len(channel_names), len(axes) - 1)):

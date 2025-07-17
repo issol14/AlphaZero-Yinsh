@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .model import YinshNet, YinshModelBuilder
 from .mcts import MCTSAgent
-from .env import YinshEnv, YinshAction, Color
-from .mapper import get_action_mapper
+from .env import YinshEnv, YinshAction, Color, GamePhase
+from .mapper import YinshActionMapper
 from . import config
 
 
@@ -59,7 +59,7 @@ class YinshAgent:
             print(f"🚀 Direct neural network prediction (no MCTS)")
 
         # 액션 매퍼
-        self.action_mapper = get_action_mapper()
+        self.action_mapper = YinshActionMapper()
 
         # 통계
         self.games_played = 0
@@ -128,29 +128,47 @@ class YinshAgent:
         # 유효한 액션들 가져오기
         valid_actions = env.get_valid_actions()
 
-        # 유효한 액션 마스크 적용
-        valid_mask = self.action_mapper.get_valid_action_mask(valid_actions)
-        masked_probs = policy_probs * np.array(valid_mask)
-
-        if masked_probs.sum() == 0:
-            # 유효한 액션이 매핑에 없으면 랜덤 선택
+        # 유효한 액션들을 인덱스로 변환하여 마스킹
+        valid_indices = []
+        for action in valid_actions:
+            try:
+                idx = self.action_mapper.action_to_index(action)
+                if idx is not None:
+                    valid_indices.append(idx)
+            except:
+                continue
+        
+        if not valid_indices:
+            # 매핑 가능한 유효 액션이 없으면 랜덤 선택
             selected_action = np.random.choice(valid_actions)
             action_prob = 1.0 / len(valid_actions)
         else:
+            # 유효한 인덱스에 대해서만 확률 추출
+            valid_probs = policy_probs[valid_indices]
+            
             # 온도 적용
             if temperature != 1.0 and temperature > 0:
-                masked_probs = np.power(masked_probs, 1.0 / temperature)
+                valid_probs = np.power(valid_probs, 1.0 / temperature)
 
             # 정규화
-            masked_probs = masked_probs / masked_probs.sum()
+            if valid_probs.sum() > 0:
+                valid_probs = valid_probs / valid_probs.sum()
+            else:
+                valid_probs = np.ones(len(valid_probs)) / len(valid_probs)
 
             # 액션 선택
-            action_index = np.random.choice(len(masked_probs), p=masked_probs)
-            selected_action = self.action_mapper.get_index_action(action_index)
-            action_prob = masked_probs[action_index]
-
-            # 매핑되지 않은 액션이면 랜덤 선택
-            if selected_action is None or selected_action not in valid_actions:
+            selected_idx_in_valid = np.random.choice(len(valid_probs), p=valid_probs)
+            selected_action_idx = valid_indices[selected_idx_in_valid]
+            
+            try:
+                selected_action = self.action_mapper.index_to_action(selected_action_idx)
+                action_prob = valid_probs[selected_idx_in_valid]
+                
+                # 선택된 액션이 실제 유효한지 확인
+                if selected_action not in valid_actions:
+                    selected_action = np.random.choice(valid_actions)
+                    action_prob = 1.0 / len(valid_actions)
+            except:
                 selected_action = np.random.choice(valid_actions)
                 action_prob = 1.0 / len(valid_actions)
 
@@ -163,22 +181,22 @@ class YinshAgent:
 
         return selected_action, direct_info
 
-    def predict(self, state_tensor: torch.Tensor) -> Tuple[np.ndarray, float]:
+    def predict(self, state_tensor: np.ndarray) -> Tuple[np.ndarray, float]:
         """
         신경망으로 정책과 가치 예측
 
         Args:
-            state_tensor: (11, 11, 11) 게임 상태 텐서
+            state_tensor: (13, 11, 11) 게임 상태 텐서
 
         Returns:
-            policy_probs: (200,) 액션 확률 분포
+            policy_probs: (4000,) 액션 확률 분포
             value: 위치 평가값 (-1 ~ +1)
         """
         return self.neural_network.predict(state_tensor)
 
     def train_step(
         self,
-        states: List[torch.Tensor],
+        states: List[np.ndarray],
         target_policies: List[np.ndarray],
         target_values: List[float],
     ) -> Dict[str, float]:
@@ -197,7 +215,7 @@ class YinshAgent:
             return {"total_loss": 0.0, "policy_loss": 0.0, "value_loss": 0.0}
 
         # 배치 텐서 생성
-        batch_states = torch.stack(states).to(self.device)
+        batch_states = torch.stack([torch.FloatTensor(s) for s in states]).to(self.device)
         batch_policies = torch.FloatTensor(np.array(target_policies)).to(self.device)
         batch_values = torch.FloatTensor(target_values).unsqueeze(1).to(self.device)
 
@@ -237,17 +255,17 @@ class YinshAgent:
 
     def get_model_info(self) -> Dict:
         """모델 정보 반환"""
-        from .utils import get_model_summary
-
-        model_info = get_model_summary(self.neural_network)
-        model_info.update(
-            {
-                "use_mcts": self.use_mcts,
-                "device": str(self.device),
-                "games_played": self.games_played,
-                "training_step": self.training_step,
-            }
-        )
+        total_params = sum(p.numel() for p in self.neural_network.parameters())
+        trainable_params = sum(p.numel() for p in self.neural_network.parameters() if p.requires_grad)
+        
+        model_info = {
+            "total_parameters": total_params,
+            "trainable_parameters": trainable_params,
+            "use_mcts": self.use_mcts,
+            "device": str(self.device),
+            "games_played": self.games_played,
+            "training_step": self.training_step,
+        }
 
         return model_info
 
@@ -304,6 +322,6 @@ def create_agent(agent_type: str = "neural", **kwargs) -> object:
     elif agent_type == "mcts":
         return YinshAgent(use_mcts=True, **kwargs)
     elif agent_type == "random":
-        return RandomAgent(**kwargs)
+        return RandomAgent()  # RandomAgent는 kwargs 필요 없음
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")

@@ -1,53 +1,66 @@
 # config.py - YINSH AlphaZero Configuration
 
-import os
+# ==== 게임 환경 설정 ====
+BOARD_SIZE = 11  # 게임 보드 크기 (11x11)
+TOTAL_MARKERS = 51  # 마커 풀 크기 (YINSH 공식 규칙)
+MAX_RINGS = 5  # 플레이어당 링 개수
+RINGS_PER_PLAYER = 5  # 각 플레이어의 링 개수 (YINSH 규칙)
+RINGS_TO_WIN = 3  # 승리에 필요한 제거된 링 개수 (YINSH 규칙)
+LINE_LENGTH_TO_WIN = 5  # 라인을 이루기 위한 마커 개수 (YINSH 규칙)
 
-# ==== 게임 설정 ====
-BOARD_SIZE = 11  # YINSH는 11x11 육각형 보드
-INPUT_SHAPE = (
-    11,
-    11,
-    11,
-)  # (channels, height, width) - 11 layers for different game states
-POLICY_OUTPUT_SIZE = 200  # 가능한 액션 수 (링 배치 + 링 이동)
-
-# ==== MCTS 설정 ====
-MCTS_SIMULATIONS = 400  # 수당 MCTS 시뮬레이션 횟수
-CPUCT = 1.0  # UCB 탐색 상수
-MAX_GAME_MOVES = 200  # 최대 게임 턴 수
+# ==== 유효한 육각형 방향 ====
+VALID_HEX_DIRECTIONS = [
+    (0, 1), (0, -1),    # 세로
+    (1, 0), (-1, 0),    # 가로 
+    (1, 1), (-1, -1),   # 대각선
+]
 
 # ==== 신경망 설정 ====
-LEARNING_RATE = 0.001
-BATCH_SIZE = 32
+INPUT_SHAPE = (13, 11, 11)  # 입력 텐서 형태 (13채널, 11x11)
+POLICY_OUTPUT_SIZE = 4000   # 액션 공간 크기 (대폭 확장)
+
+# 모델 아키텍처
 AMOUNT_OF_RESIDUAL_BLOCKS = 5
 CONVOLUTION_FILTERS = 64
-L2_REGULARIZATION = 1e-4
+DENSE_LAYERS = [256]
+
+# ==== MCTS 설정 ====
+MCTS_SIMULATIONS = 800
+CPUCT = 1.0  # UCT 탐색 계수
 
 # ==== 학습 설정 ====
-EPOCHS_PER_TRAINING = 10
-GAMES_PER_ITERATION = 100
-EVALUATION_GAMES = 20
-MODEL_SELECTION_THRESHOLD = 0.55  # 새 모델이 이길 확률
+LEARNING_RATE = 0.001
+L2_REGULARIZATION = 1e-4
+MOMENTUM = 0.9
+BATCH_SIZE = 32
 
-# ==== 디렉토리 설정 ====
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEMORY_DIR = os.path.join(BASE_DIR, "memory")
-MODEL_FOLDER = os.path.join(BASE_DIR, "models")
-LOSS_PLOTS_FOLDER = os.path.join(BASE_DIR, "plots")
+# 훈련 에포크 및 스케줄링
+TRAINING_LOOPS = 100
+EPOCHS_PER_LOOP = 10
+LEARNING_RATE_DECAY = 0.95
+LEARNING_RATE_DECAY_STEPS = 10
 
-# 디렉토리 생성
-os.makedirs(MEMORY_DIR, exist_ok=True)
-os.makedirs(MODEL_FOLDER, exist_ok=True)
-os.makedirs(LOSS_PLOTS_FOLDER, exist_ok=True)
+# 메모리 관리
+MEMORY_SIZE = 100000
+MEMORY_MINIMUM_SIZE = 10000
 
-# ==== YINSH 게임 규칙 설정 ====
-RINGS_PER_PLAYER = 5  # 각 플레이어당 링 개수
-RINGS_TO_WIN = 3  # 승리에 필요한 링 제거 개수
-LINE_LENGTH_TO_WIN = 5  # 연속된 마커 5개로 라인 완성
+# ==== 파일 및 디렉토리 설정 ====
+MODEL_FOLDER = "models"
+MEMORY_DIR = "memory" 
+LOSS_PLOTS_FOLDER = "plots"
+LOG_FOLDER = "logs"
+
+# 체크포인트 및 저장
+CHECKPOINT_FREQUENCY = 10  # 몇 루프마다 체크포인트 저장
+MODEL_SAVE_FREQUENCY = 5   # 몇 루프마다 모델 저장
+
+# ==== 게임 플레이 설정 ====
+MAX_GAME_MOVES = 200  # 게임당 최대 이동 수
+GAME_TIMEOUT = 600    # 게임 타임아웃 (초)
 
 # ==== 로깅 설정 ====
+VERBOSE = True
 LOG_LEVEL = "INFO"
-SAVE_GAMES = True
 TENSORBOARD_LOG = True
 
 # ==== PyTorch 설정 ====
@@ -63,3 +76,13 @@ SELFPLAY_NOISE_EPSILON = 0.25  # Dirichlet 노이즈 엡실론
 # ==== 평가 설정 ====
 EVALUATION_TEMPERATURE = 0.1  # 평가 시 온도
 EVALUATION_SIMULATIONS = 800  # 평가 시 시뮬레이션 수
+EVALUATION_GAMES = 10  # 평가 게임 수
+
+# ==== 게임 플레이 설정 ====
+MAX_GAME_MOVES = 200  # 게임당 최대 이동 수
+GAME_TIMEOUT = 600    # 게임 타임아웃 (초)
+
+# ==== 디버깅 설정 ====
+DEBUG_MODE = False
+SAVE_GAME_STATES = True
+VISUALIZE_STATES = False

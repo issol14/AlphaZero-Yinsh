@@ -16,12 +16,12 @@ Modules:
 - config: Configuration constants
 """
 
-from .env import YinshEnv, YinshAction, Color
+from .env import YinshEnv, YinshAction, Color, GamePhase
 from .model import YinshNet as YinshModel
 from .agent import YinshAgent
 from .mcts import MCTS as YinshMCTS
 from .node import YinshNode
-from .mapper import YinshActionMapper, get_action_mapper
+from .mapper import YinshActionMapper
 from .utils import *
 from . import config
 
@@ -34,6 +34,7 @@ __all__ = [
     "YinshEnv",
     "YinshAction",
     "Color",
+    "GamePhase",
     # 모델
     "YinshModel",
     # 에이전트
@@ -43,7 +44,6 @@ __all__ = [
     "YinshNode",
     # 매퍼
     "YinshActionMapper",
-    "get_action_mapper",
     # 설정
     "config",
 ]
@@ -93,9 +93,9 @@ def test_package():
         print("✅ MCTS imported successfully")
 
         # 매퍼 테스트
-        from .mapper import get_action_mapper
+        from .mapper import YinshActionMapper
 
-        mapper = get_action_mapper()
+        mapper = YinshActionMapper()
         print("✅ Action mapper imported successfully")
 
         print("🎉 All modules imported successfully!")
