@@ -184,9 +184,7 @@ class YinshEnv:
         self.done = False
         self.winner = None
 
-        # 마커 풀 관리 (새로 추가)
-        self.markers_in_pool = config.TOTAL_MARKERS  # 사용 가능한 마커 수
-        self.markers_on_board = 0  # 보드 위 마커 수
+        # 마커 풀 관리는 실시간 계산으로 처리 (property 사용)
 
         # 라인 제거 시스템 (새로 추가)
         self.pending_line_removals = []  # 제거 대기 중인 라인들
@@ -234,12 +232,20 @@ class YinshEnv:
         """해당 위치에 마커가 있는지 확인 (색깔 무관)"""
         return any(pos in marker_set for marker_set in self.marker_positions.values())
 
+    @property
+    def markers_on_board(self) -> int:
+        """현재 보드에 놓인 마커 수 (실시간 계산)"""
+        return len(self.marker_positions[Color.WHITE]) + len(self.marker_positions[Color.BLACK])
+
+    @property
+    def markers_in_pool(self) -> int:
+        """사용 가능한 마커 수 (실시간 계산)"""
+        return config.TOTAL_MARKERS - self.markers_on_board
+
     def _place_marker(self, pos: Tuple[int, int], color: Color) -> bool:
         """마커 배치 (풀에서 가져오기)"""
         if self.markers_in_pool <= 0:
             return False
-        self.markers_in_pool -= 1
-        self.markers_on_board += 1
         self.marker_positions[color].add(pos)
         return True
     
@@ -337,7 +343,7 @@ class YinshEnv:
         # 1단계: 연속된 빈 공간들 건너뛰기
         while True:
             next_pos = (current_pos[0] + dx, current_pos[1] + dy)
-            
+       
             if not self.is_valid_position(next_pos):
                 break
                 
@@ -496,7 +502,7 @@ class YinshEnv:
 
     def _remove_line_and_ring(self, remove_positions: List[Tuple[int, int]], remove_ring_position: Optional[Tuple[int, int]]):
         """라인을 제거하고 해당 링을 제거"""
-        # 라인 제거
+        # 라인 제거 (마커 풀 상태는 property로 자동 계산됨)
         for pos in remove_positions:
             if pos in self.marker_positions[self.current_player]:
                 self.marker_positions[self.current_player].remove(pos)
@@ -707,9 +713,7 @@ class YinshEnv:
         new_env.done = self.done
         new_env.winner = self.winner
         
-        # 새로 추가된 필드들
-        new_env.markers_in_pool = self.markers_in_pool
-        new_env.markers_on_board = self.markers_on_board
+        # 새로 추가된 필드들 (markers_in_pool, markers_on_board는 property로 자동 계산)
         new_env.pending_line_removals = self.pending_line_removals.copy()
         new_env.line_removal_player = self.line_removal_player
         

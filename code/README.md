@@ -65,8 +65,14 @@ pip install -r requirements.txt
 # 빠른 시작 (기본 설정으로 학습)
 python quick_start.py
 
+# 병렬 AlphaZero 파이프라인 (권장) ⚡
+python scripts/run_alphazero.py --quick
+
 # 디버그 모드 (상세한 게임 진행 확인)
 python debug_game.py
+
+# 병렬 성능 테스트
+python test_parallel.py
 ```
 
 ## 📚 학습 가이드
@@ -81,14 +87,17 @@ python debug_game.py
 ### 학습 스크립트
 
 ```bash
-# Self-Play 실행
-python scripts/selfplay.py --num_games 100 --model_path models/best_model.pth
+# Self-Play 실행 (순차)
+python scripts/selfplay.py --games 100 --model models/best_model.pt
+
+# Self-Play 실행 (병렬) ⚡ 새로운 기능!
+python scripts/selfplay.py --games 100 --parallel --workers 6
 
 # 모델 학습
-python scripts/train.py --data_path memory/ --epochs 10 --batch_size 32
+python scripts/train.py --data memory/ --epochs 10 --batch-size 32
 
 # 모델 평가
-python scripts/evaluate.py --model1_path models/model1.pth --model2_path models/model2.pth
+python scripts/evaluate.py --candidate models/candidate.pt --best models/best.pt
 ```
 
 ### 주요 하이퍼파라미터
@@ -100,6 +109,18 @@ LEARNING_RATE = 0.001       # 학습률
 BATCH_SIZE = 32            # 배치 크기
 EPOCHS = 10                # 에포크 수
 SELF_PLAY_GAMES = 100      # Self-Play 게임 수
+```
+
+### 병렬 처리 설정 ⚡
+
+```bash
+# 병렬 Self-Play 옵션
+--parallel              # 병렬 모드 활성화
+--workers 6             # 워커 프로세스 수 (기본: CPU 코어 * 0.75)
+
+# 사용 예시
+python scripts/selfplay.py --games 50 --parallel --workers 4
+python scripts/run_alphazero.py --demo  # 기본적으로 병렬 사용
 ```
 
 ## 🎮 Self-Play 시스템

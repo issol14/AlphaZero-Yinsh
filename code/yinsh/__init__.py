@@ -22,6 +22,7 @@ from .agent import YinshAgent
 from .mcts import MCTS as YinshMCTS
 from .node import YinshNode
 from .mapper import YinshActionMapper
+from .board_display import display_board, display_compact_board, display_action_details
 from .utils import *
 from . import config
 

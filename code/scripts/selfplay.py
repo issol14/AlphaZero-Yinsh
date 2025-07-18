@@ -6,6 +6,7 @@ YINSH AlphaZero Self-Play Script (Enhanced)
 
 This script generates high-quality training data through self-play games
 with proper MCTS policy distribution extraction for optimal learning.
+Supports both sequential and parallel execution.
 """
 
 import os
@@ -17,15 +18,172 @@ from tqdm import tqdm
 import json
 import time
 from pathlib import Path
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Dict
 
 # Add the parent directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from yinsh import YinshEnv, YinshAgent, Color, config
+from yinsh import YinshEnv, YinshAgent, Color, config, display_board, display_action_details, display_compact_board
 from yinsh.mapper import YinshActionMapper
 
 
-def play_game(agent1, agent2, max_turns=1000, game_id=0):
+def run_single_game_parallel(game_config: Dict) -> Dict:
+    """병렬 실행용 단일 게임 실행 함수"""
+    try:
+        game_id = game_config['game_id']
+        model_path = game_config['model_path']
+        output_dir = game_config['output_dir']
+        mcts_sims = game_config['mcts_sims']
+        use_mcts = game_config['use_mcts']
+        show_board = game_config['show_board']
+        
+        # 디바이스 설정
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        
+        # GPU 메모리 정리
+        if device == 'cuda':
+            torch.cuda.empty_cache()
+        
+        print(f"🎮 [Worker {os.getpid()}] Game {game_id + 1} starting...")
+        
+        # 에이전트 생성
+        agent1 = YinshAgent(model_path=model_path, use_mcts=use_mcts, device=device)
+        agent2 = YinshAgent(model_path=model_path, use_mcts=use_mcts, device=device)
+        
+        # MCTS 시뮬레이션 수 설정
+        if use_mcts:
+            agent1.mcts_agent.mcts.num_simulations = mcts_sims
+            agent2.mcts_agent.mcts.num_simulations = mcts_sims
+        
+        game_start_time = time.time()
+        
+        # 게임 실행
+        game_history, winner, turns = play_game(agent1, agent2, game_id=game_id, show_board=show_board)
+        
+        # 훈련 데이터 생성
+        training_data = generate_training_data(game_history, winner, game_id=game_id)
+        
+        # 데이터 저장
+        save_result = save_game_data(training_data, output_dir, game_id)
+        
+        game_time = time.time() - game_start_time
+        
+        # 메모리 정리
+        if device == 'cuda':
+            torch.cuda.empty_cache()
+        
+        result = {
+            'game_id': game_id,
+            'winner': winner.name if winner else 'DRAW',
+            'turns': turns,
+            'positions': len(training_data),
+            'game_time': game_time,
+            'save_success': save_result is not None,
+            'process_id': os.getpid()
+        }
+        
+        print(f"✅ [Worker {os.getpid()}] Game {game_id + 1} completed in {game_time:.1f}s")
+        return result
+        
+    except Exception as e:
+        print(f"❌ [Worker {os.getpid()}] Game {game_id + 1} failed: {e}")
+        return {
+            'game_id': game_id,
+            'error': str(e),
+            'process_id': os.getpid()
+        }
+
+
+def run_parallel_games(args):
+    """병렬 게임 실행"""
+    print("=" * 50)
+    
+    # 게임 설정 생성
+    game_configs = [
+        {
+            'game_id': i,
+            'model_path': args.model,
+            'output_dir': args.output,
+            'mcts_sims': args.mcts_sims,
+            'use_mcts': not args.no_mcts,
+            'show_board': args.show_board
+        }
+        for i in range(args.games)
+    ]
+    
+    # 통계 초기화
+    total_positions = 0
+    white_wins = 0
+    black_wins = 0
+    draws = 0
+    completed_games = 0
+    failed_games = 0
+    total_start_time = time.time()
+    
+    # 병렬 실행
+    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+        # 모든 게임 제출
+        future_to_config = {
+            executor.submit(run_single_game_parallel, config): config 
+            for config in game_configs
+        }
+        
+        # 진행률 바 설정
+        with tqdm(total=args.games, desc="🎮 Games", unit="game") as pbar:
+            # 완료된 작업들 처리
+            for future in as_completed(future_to_config):
+                try:
+                    result = future.result()
+                    
+                    if 'error' in result:
+                        failed_games += 1
+                    else:
+                        completed_games += 1
+                        total_positions += result['positions']
+                        
+                        # 승부 통계
+                        if result['winner'] == 'WHITE':
+                            white_wins += 1
+                        elif result['winner'] == 'BLACK':
+                            black_wins += 1
+                        else:
+                            draws += 1
+                        
+                        # 진행률 업데이트
+                        pbar.set_postfix({
+                            'W': white_wins,
+                            'B': black_wins,
+                            'D': draws,
+                            'Pos': total_positions
+                        })
+                    
+                    pbar.update(1)
+                    
+                except Exception as e:
+                    print(f"❌ Error processing result: {e}")
+                    failed_games += 1
+                    pbar.update(1)
+    
+    # 최종 통계
+    total_time = time.time() - total_start_time
+    print(f"\n🎉 병렬 Self-Play 완료! (총 소요시간: {total_time:.1f}초)")
+    print("📈 최종 통계:")
+    print(f"├── 총 게임 수: {args.games}")
+    print(f"├── 완료된 게임: {completed_games}")
+    print(f"├── 실패한 게임: {failed_games}")
+    print(f"├── 총 포지션 수: {total_positions}")
+    if completed_games > 0:
+        print(f"├── White 승리: {white_wins} ({white_wins/completed_games*100:.1f}%)")
+        print(f"├── Black 승리: {black_wins} ({black_wins/completed_games*100:.1f}%)")
+        print(f"├── 무승부: {draws} ({draws/completed_games*100:.1f}%)")
+        print(f"├── 게임당 평균 포지션: {total_positions/completed_games:.1f}")
+    print(f"├── 게임/초: {completed_games/total_time:.2f}")
+    print(f"└── 워커 수: {args.workers}")
+
+
+def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
     """두 에이전트 간의 게임 진행 - MCTS 정책 정보 포함"""
     print(f"\n🎮 Starting Game {game_id + 1}...")
     
@@ -33,6 +191,10 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0):
     game_history = []
     turn_count = 0
     game_start_time = time.time()
+    
+    # 초기 보드 상태 출력 (옵션)
+    if show_board:
+        display_board(env, f"Game {game_id + 1} - 초기 상태")
 
     while not env.is_game_over() and turn_count < max_turns:
         turn_start_time = time.time()
@@ -80,6 +242,14 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0):
             print(f"    🎯 액션 실행 중: {action}")
             env.step(action)
             print(f"    ✅ 액션 실행 완료")
+            
+            # 보드 상태 출력 (옵션)
+            if show_board:
+                print(f"    📋 보드 상태:")
+                display_action_details(action, action_info)
+                display_board(env, f"Turn {turn_count + 1} - {player_name} 플레이 후")
+                print("-" * 40)
+            
         except Exception as e:
             print(f"    ❌ 액션 실행 실패: {e}")
             import traceback
@@ -285,6 +455,9 @@ def main():
         "--no-mcts", action="store_true", help="Disable MCTS (use direct prediction)"
     )
     parser.add_argument("--mcts-sims", type=int, default=800, help="MCTS simulations")
+    parser.add_argument("--show-board", action="store_true", help="각 턴마다 보드 상태 출력")
+    parser.add_argument("--workers", type=int, default=1, help="병렬 워커 수 (1=순차실행)")
+    parser.add_argument("--parallel", action="store_true", help="병렬 실행 모드 활성화")
 
     args = parser.parse_args()
 
@@ -294,7 +467,10 @@ def main():
     print(f"   모델: {args.model if args.model else 'Random initialization'}")
     print(f"   MCTS: {'Disabled' if args.no_mcts else f'Enabled ({args.mcts_sims} sims)'}")
     print(f"   출력 디렉토리: {args.output}")
+    print(f"   보드 출력: {'Enabled' if args.show_board else 'Disabled'}")
     print(f"   디바이스: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+    print(f"   실행 모드: {'Parallel' if args.parallel and args.workers > 1 else 'Sequential'}")
+    print(f"   워커 수: {args.workers}")
 
     # 에이전트 생성 (현재 인터페이스에 맞게)
     try:
@@ -331,11 +507,20 @@ def main():
     print(f"\n🚀 {args.games}게임 셀프플레이 시작!")
     print("=" * 50)
 
+    # 병렬 실행 모드 확인
+    if args.parallel and args.workers > 1:
+        print(f"\n🚀 병렬 모드로 {args.games}개 게임을 {args.workers}개 워커로 실행")
+        run_parallel_games(args)
+        return
+    
+    # 순차 실행 모드 (기존 방식)
+    print(f"\n🐌 순차 모드로 {args.games}개 게임 실행")
+    
     # 게임 진행
     for game_id in range(args.games):
         try:
             # 게임 진행
-            game_history, winner, turns = play_game(agent1, agent2, game_id=game_id)
+            game_history, winner, turns = play_game(agent1, agent2, game_id=game_id, show_board=args.show_board)
 
             # 통계 업데이트
             if winner == Color.WHITE:
@@ -397,4 +582,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # 멀티프로세싱 시작 방법 설정
+    mp.set_start_method('spawn', force=True)
     main()

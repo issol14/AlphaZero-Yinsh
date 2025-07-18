@@ -173,6 +173,10 @@ class AlphaZeroPipeline:
             "--output", str(data_output)
         ]
         
+        # 병렬 처리 옵션 추가
+        if self.config.get('parallel', False) and self.config.get('workers', 1) > 1:
+            cmd.extend(["--parallel", "--workers", str(self.config['workers'])])
+        
         try:
             self.log(f"   명령어: {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=Path.cwd(), capture_output=True, text=True)
@@ -470,6 +474,12 @@ def main():
     parser.add_argument("--cleanup-data", action="store_true",
                        help="Iteration 완료 후 임시 데이터 삭제")
     
+    # 병렬 처리 설정
+    parser.add_argument("--workers", type=int, default=1,
+                       help="병렬 워커 수 (1=순차실행)")
+    parser.add_argument("--parallel", action="store_true",
+                       help="병렬 셀프플레이 활성화")
+    
     args = parser.parse_args()
     
     # 설정 딕셔너리 생성
@@ -486,7 +496,9 @@ def main():
         'models_dir': args.models_dir,
         'data_dir': args.data_dir,
         'logs_dir': args.logs_dir,
-        'cleanup_data': args.cleanup_data
+        'cleanup_data': args.cleanup_data,
+        'parallel': args.parallel,
+        'workers': args.workers
     }
     
     # 파이프라인 실행

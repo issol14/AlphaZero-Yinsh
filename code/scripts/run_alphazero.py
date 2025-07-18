@@ -43,10 +43,12 @@ def run_demo_mode():
         "--selfplay-games", "10",
         "--selfplay-mcts-sims", "100",
         "--training-epochs", "5",
-        "--training-batch-size", "16",
+        "--training-batch-size", "32",
         "--evaluation-games", "20",
         "--evaluation-mcts-sims", "100",
-        "--cleanup-data"
+        "--cleanup-data",
+        "--parallel",
+        "--workers", "6"
     ]
     
     print(f"실행 명령어: {' '.join(cmd)}")
@@ -74,7 +76,9 @@ def run_quick_mode():
         "--evaluation-games", "50",
         "--evaluation-mcts-sims", "200",
         "--continue-training",
-        "--cleanup-data"
+        "--cleanup-data",
+        "--parallel",
+        "--workers", "6"
     ]
     
     print(f"실행 명령어: {' '.join(cmd)}")
@@ -95,13 +99,15 @@ def run_full_mode():
     cmd = [
         "uv", "run", "python", "scripts/pipeline.py",
         "--iterations", "100",
-        "--max-hours", "24",
+        "--max-hours", "500",
         "--selfplay-games", "100",
-        "--selfplay-mcts-sims", "800",
+        "--selfplay-mcts-sims", "200", # 800
         "--training-epochs", "10",
         "--evaluation-games", "100",
         "--continue-training",
-        "--cleanup-data"
+        "--cleanup-data",
+        "--parallel",
+        "--workers", "6"
     ]
     
     print(f"실행 명령어: {' '.join(cmd)}")
