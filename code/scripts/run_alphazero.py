@@ -98,12 +98,13 @@ def run_full_mode():
     
     cmd = [
         "uv", "run", "python", "scripts/pipeline.py",
-        "--iterations", "100",
-        "--max-hours", "500",
-        "--selfplay-games", "100",
-        "--selfplay-mcts-sims", "200", # 800
+        "--iterations", "20", # 100
+        "--max-hours", "500000", 
+        "--selfplay-games", "10", # 100
+        "--selfplay-mcts-sims", "100", # 800
         "--training-epochs", "10",
-        "--evaluation-games", "100",
+        "--evaluation-games", "10", # 100
+        "--evaluation-mcts-sims", "100", # 400
         "--continue-training",
         "--cleanup-data",
         "--parallel",

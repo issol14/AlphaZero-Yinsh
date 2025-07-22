@@ -75,7 +75,7 @@ python debug_game.py
 python test_parallel.py
 ```
 
-## 📚 학습 가이드
+## 📚 AlphaZero 학습 완전 가이드
 
 ### 학습 프로세스
 
@@ -84,20 +84,239 @@ python test_parallel.py
 3. **Evaluation**: 새로운 모델 성능 평가
 4. **Iteration**: 1-3 과정 반복
 
-### 학습 스크립트
+## 🚀 **실행 스크립트 완전 가이드**
 
+### **1. 간편 실행 스크립트 (권장 시작점)**
+
+#### **`scripts/run_alphazero.py`** - 올인원 런처
 ```bash
-# Self-Play 실행 (순차)
-python scripts/selfplay.py --games 100 --model models/best_model.pt
+# 📌 기본 사용법
+python scripts/run_alphazero.py [모드]
 
-# Self-Play 실행 (병렬) ⚡ 새로운 기능!
-python scripts/selfplay.py --games 100 --parallel --workers 6
+# 📌 사용 가능한 모드들
+--demo        # 데모 모드 (빠른 체험)
+--quick       # 빠른 모드 (적당한 규모) 
+--full        # 풀 모드 (완전한 학습)
+--custom      # 커스텀 모드 (사용자 설정)
+--status      # 현재 시스템 상태 보기
+--evaluate    # 단일 모델 평가
+```
 
-# 모델 학습
-python scripts/train.py --data memory/ --epochs 10 --batch-size 32
+**각 모드별 자동 설정:**
+- **데모 모드**: 5 iterations, 10게임/iter, 4 workers, 2시간 제한
+- **퀵 모드**: 20 iterations, 50게임/iter, 6 workers, 8시간 제한  
+- **풀 모드**: 100 iterations, 100게임/iter, 8 workers, 24시간 제한
 
-# 모델 평가
-python scripts/evaluate.py --candidate models/candidate.pt --best models/best.pt
+### **2. 셀프플레이 데이터 생성**
+
+#### **`scripts/selfplay.py`** - 훈련 데이터 생성
+```bash
+python scripts/selfplay.py [옵션들]
+
+# 📌 필수 옵션
+--games INT              # 플레이할 게임 수 (기본: 50)
+
+# 📌 모델 관련
+--model PATH             # 로드할 모델 경로 (기본: None=랜덤)
+--no-mcts               # MCTS 비활성화 (직접 예측)
+--mcts-sims INT         # MCTS 시뮬레이션 수 (기본: 800)
+
+# 📌 출력 관련  
+--output DIR            # 출력 디렉토리 (기본: "memory")
+--show-board           # 각 턴마다 보드 상태 출력
+
+# 📌 병렬 처리 (NEW!)
+--parallel             # 병렬 실행 모드 활성화
+--workers INT          # 병렬 워커 수 (기본: 1=순차실행)
+```
+
+**사용 예시:**
+```bash
+# 순차 실행 (기본)
+python scripts/selfplay.py --games 50 --mcts-sims 800
+
+# 병렬 실행 (6배 빠름!)
+python scripts/selfplay.py --games 50 --parallel --workers 6
+
+# 기존 모델 사용
+python scripts/selfplay.py --games 100 --model models/best_model.pt --parallel --workers 8
+
+# 빠른 테스트 (MCTS 적게)
+python scripts/selfplay.py --games 20 --mcts-sims 200 --parallel --workers 4
+```
+
+### **3. 모델 훈련**
+
+#### **`scripts/train.py`** - 신경망 훈련
+```bash
+python scripts/train.py [옵션들]
+
+# 📌 데이터 관련
+--data DIR              # 훈련 데이터 폴더 (기본: "memory")
+--model PATH            # 이어서 훈련할 모델 경로 (기본: None=새 모델)
+
+# 📌 출력 관련
+--output DIR            # 모델 저장 폴더 (기본: "models")
+
+# 📌 훈련 하이퍼파라미터
+--epochs INT            # 훈련 에포크 수 (기본: 10)
+--batch-size INT        # 배치 크기 (기본: 32)
+--lr FLOAT              # 학습률 (기본: 0.001)
+```
+
+**사용 예시:**
+```bash
+# 기본 훈련
+python scripts/train.py --data memory --epochs 10
+
+# 기존 모델에서 이어서 훈련
+python scripts/train.py --data memory --model models/checkpoint.pt --epochs 5
+
+# 하이퍼파라미터 조정
+python scripts/train.py --data memory --epochs 20 --batch-size 64 --lr 0.0005
+```
+
+### **4. 모델 평가**
+
+#### **`scripts/evaluate.py`** - 모델 성능 평가
+```bash
+python scripts/evaluate.py [옵션들]
+
+# 📌 필수 옵션
+--candidate PATH        # 평가할 새 모델 경로 (필수)
+
+# 📌 비교 모델
+--best PATH             # 기존 best 모델 경로 (기본: None=랜덤 baseline)
+
+# 📌 평가 설정
+--games INT             # 평가 게임 수 (기본: 100)
+--threshold FLOAT       # 새 모델 채택 최소 승률 (기본: 0.55)
+--mcts-sims INT         # MCTS 시뮬레이션 수 (기본: 400)
+
+# 📌 기타
+--no-save              # 결과 파일 저장 안함
+```
+
+**사용 예시:**
+```bash
+# 새 모델 vs 기존 모델
+python scripts/evaluate.py --candidate models/new_model.pt --best models/best_model.pt
+
+# 새 모델 vs 랜덤 (baseline 테스트)
+python scripts/evaluate.py --candidate models/new_model.pt --games 50
+
+# 빠른 평가 (적은 게임, 적은 MCTS)
+python scripts/evaluate.py --candidate models/test.pt --games 20 --mcts-sims 200
+```
+
+### **5. 완전 자동화 파이프라인**
+
+#### **`scripts/pipeline.py`** - 완전 AlphaZero 루프
+```bash
+python scripts/pipeline.py [옵션들]
+
+# 📌 파이프라인 제어
+--iterations INT        # 최대 iteration 수 (기본: 100)
+--max-hours INT         # 최대 실행 시간 (기본: 24시간)
+
+# 📌 셀프플레이 설정
+--selfplay-games INT    # Iteration당 게임 수 (기본: 100)
+--selfplay-mcts-sims INT # MCTS 시뮬레이션 수 (기본: 800)
+
+# 📌 훈련 설정
+--training-epochs INT   # 훈련 에포크 수 (기본: 10)
+--training-batch-size INT # 배치 크기 (기본: 32)
+--training-lr FLOAT     # 학습률 (기본: 0.001)
+--continue-training     # 기존 모델에서 이어서 훈련
+
+# 📌 평가 설정
+--evaluation-games INT  # 모델 평가 게임 수 (기본: 100)
+--evaluation-threshold FLOAT # 승률 기준 (기본: 0.55)
+--evaluation-mcts-sims INT # 평가 MCTS 시뮬레이션 (기본: 400)
+
+# 📌 디렉토리 설정
+--models-dir DIR        # 모델 저장 디렉토리 (기본: "models")
+--data-dir DIR          # 훈련 데이터 임시 디렉토리 (기본: "pipeline_data")
+--logs-dir DIR          # 로그 저장 디렉토리 (기본: "pipeline_logs")
+
+# 📌 기타 설정
+--cleanup-data         # Iteration 완료 후 임시 데이터 삭제
+
+# 📌 병렬 처리 (NEW!)
+--parallel             # 병렬 셀프플레이 활성화
+--workers INT          # 병렬 워커 수 (기본: 1)
+```
+
+**사용 예시:**
+```bash
+# 기본 파이프라인 (순차 실행)
+python scripts/pipeline.py --iterations 20 --max-hours 8
+
+# 병렬 파이프라인 (권장)
+python scripts/pipeline.py \
+    --iterations 20 \
+    --selfplay-games 50 \
+    --parallel \
+    --workers 6 \
+    --max-hours 8 \
+    --cleanup-data
+
+# 빠른 프로토타이핑
+python scripts/pipeline.py \
+    --iterations 5 \
+    --selfplay-games 20 \
+    --selfplay-mcts-sims 400 \
+    --training-epochs 5 \
+    --parallel \
+    --workers 4
+
+# 풀 스케일 훈련
+python scripts/pipeline.py \
+    --iterations 100 \
+    --selfplay-games 100 \
+    --selfplay-mcts-sims 800 \
+    --training-epochs 10 \
+    --evaluation-games 100 \
+    --parallel \
+    --workers 8 \
+    --max-hours 24 \
+    --continue-training \
+    --cleanup-data
+```
+
+## 🎯 **권장 실행 시퀀스**
+
+### **초보자용 (처음 시작)**
+```bash
+# 1. 빠른 데모 체험
+python scripts/run_alphazero.py --demo
+
+# 2. 성능 테스트
+python test_parallel.py
+
+# 3. 적당한 규모 학습  
+python scripts/run_alphazero.py --quick
+```
+
+### **고급 사용자용 (커스터마이징)**
+```bash
+# 1. 셀프플레이 데이터 생성
+python scripts/selfplay.py --games 100 --parallel --workers 8 --output custom_data
+
+# 2. 모델 훈련
+python scripts/train.py --data custom_data --epochs 15 --batch-size 64
+
+# 3. 모델 평가
+python scripts/evaluate.py --candidate models/trained_model.pt --games 100
+
+# 4. 완전 파이프라인 (커스텀 설정)
+python scripts/pipeline.py \
+    --iterations 50 \
+    --selfplay-games 80 \
+    --parallel \
+    --workers 6 \
+    --training-epochs 12 \
+    --evaluation-threshold 0.60
 ```
 
 ### 주요 하이퍼파라미터
@@ -111,17 +330,30 @@ EPOCHS = 10                # 에포크 수
 SELF_PLAY_GAMES = 100      # Self-Play 게임 수
 ```
 
-### 병렬 처리 설정 ⚡
+## ⚡ **성능 최적화 가이드**
 
+### **병렬 처리 최적화:**
 ```bash
-# 병렬 Self-Play 옵션
---parallel              # 병렬 모드 활성화
---workers 6             # 워커 프로세스 수 (기본: CPU 코어 * 0.75)
+# CPU 코어별 권장 워커 수:
+# 4코어: --workers 3
+# 8코어: --workers 6 
+# 16코어: --workers 12
+# 24코어: --workers 18
 
 # 사용 예시
 python scripts/selfplay.py --games 50 --parallel --workers 4
 python scripts/run_alphazero.py --demo  # 기본적으로 병렬 사용
 ```
+
+### **메모리/시간 최적화:**
+- **빠른 테스트**: `--mcts-sims 200`, `--games 20`
+- **균형잡힌 설정**: `--mcts-sims 400`, `--games 50` 
+- **최고 품질**: `--mcts-sims 800`, `--games 100`
+
+### **GPU 메모리 최적화:**
+- **작은 GPU (4-8GB)**: `--batch-size 16`, `--workers 4`
+- **중간 GPU (8-16GB)**: `--batch-size 32`, `--workers 6`
+- **큰 GPU (16GB+)**: `--batch-size 64`, `--workers 8`
 
 ## 🎮 Self-Play 시스템
 
@@ -167,6 +399,7 @@ chess-deep-rl/code/
 ├── requirements.txt       # Python 의존성
 ├── quick_start.py        # 빠른 시작 스크립트
 ├── debug_game.py         # 디버그용 게임 실행
+├── test_parallel.py      # 병렬 성능 테스트
 ├── yinsh/                # 핵심 YINSH 패키지
 │   ├── __init__.py
 │   ├── env.py            # 게임 환경
@@ -178,11 +411,37 @@ chess-deep-rl/code/
 │   ├── config.py         # 설정
 │   └── utils.py          # 유틸리티
 ├── scripts/              # 실행 스크립트
-│   ├── train.py          # 학습 스크립트
-│   └── selfplay.py       # Self-Play 스크립트
+│   ├── run_alphazero.py  # 올인원 런처 (권장)
+│   ├── pipeline.py       # 완전 자동화 파이프라인
+│   ├── selfplay.py       # Self-Play (병렬 지원)
+│   ├── train.py          # 모델 훈련
+│   └── evaluate.py       # 모델 평가
 ├── models/               # 학습된 모델 저장
 ├── memory/               # Self-Play 데이터 저장
+├── pipeline_data/        # 파이프라인 임시 데이터
+├── pipeline_logs/        # 파이프라인 로그
 └── plots/                # 학습 그래프 저장
+```
+
+## 🗂️ **결과 파일 구조**
+
+실행 후 생성되는 파일들:
+```
+models/
+├── best_model.pt              # 현재 최고 모델
+├── best_model_info.json       # 모델 메타데이터
+└── history/                   # 모델 히스토리
+
+memory/ (또는 지정 디렉토리)
+├── game_0.pt                  # 게임별 훈련 데이터
+├── game_1.pt
+└── ...
+
+pipeline_logs/
+├── pipeline_YYYYMMDD_HHMMSS.log # 파이프라인 실행 로그
+
+evaluation_results/
+├── eval_YYYYMMDD_HHMMSS.json  # 평가 결과
 ```
 
 ## 🔧 문제 해결
