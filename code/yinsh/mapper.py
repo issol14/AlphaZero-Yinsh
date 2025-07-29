@@ -1,4 +1,4 @@
-# mapper.py - YINSH Action Mapper
+# mapper.py - Simplified YINSH Action Mapper (MOVE_RING only)
 
 import numpy as np
 from typing import Dict, List, Optional, Tuple
@@ -7,7 +7,7 @@ from . import config
 
 
 class YinshActionMapper:
-    """YINSH 액션을 신경망 출력과 매핑하는 클래스"""
+    """간소화된 YINSH 액션을 신경망 출력과 매핑하는 클래스 (MOVE_RING만)"""
 
     def __init__(self):
         self.action_to_index: Dict[YinshAction, int] = {}
@@ -15,26 +15,16 @@ class YinshActionMapper:
         self._build_mapping()
 
     def _build_mapping(self):
-        """액션 매핑 구축"""
+        """액션 매핑 구축 (간소화: from_pos * to_pos = 121개)"""
         index = 0
 
-        # 링 배치 액션 (11x11 = 121개)
-        for x in range(config.BOARD_SIZE):
-            for y in range(config.BOARD_SIZE):
-                action = YinshAction("PLACE_RING", to_pos=(x, y))
-                self.action_to_index[action] = index
-                self.index_to_action[index] = action
-                index += 1
-
-        # 링 이동 액션 (시작 위치 x 도착 위치)
-        # 실제로는 유효한 이동만 고려해야 하지만, 간단화를 위해 모든 가능한 조합
+        # 간소화된 매핑: from_pos와 to_pos를 조합하여 121개 액션
         for from_x in range(config.BOARD_SIZE):
             for from_y in range(config.BOARD_SIZE):
                 for to_x in range(config.BOARD_SIZE):
                     for to_y in range(config.BOARD_SIZE):
-                        if (from_x, from_y) != (to_x, to_y):
+                        if (from_x, from_y) != (to_x, to_y):  # 같은 위치로 이동 불가
                             action = YinshAction(
-                                "MOVE_RING",
                                 from_pos=(from_x, from_y),
                                 to_pos=(to_x, to_y),
                             )
@@ -43,7 +33,7 @@ class YinshActionMapper:
                                 self.index_to_action[index] = action
                                 index += 1
 
-        print(f"🔗 Action mapper built: {len(self.action_to_index)} actions mapped")
+        print(f"🔗 Simplified action mapper built: {len(self.action_to_index)} actions mapped")
 
     def get_action_index(self, action: YinshAction) -> Optional[int]:
         """액션을 인덱스로 변환"""
@@ -85,6 +75,7 @@ class YinshActionMapper:
             "total_actions": len(self.action_to_index),
             "policy_output_size": config.POLICY_OUTPUT_SIZE,
             "coverage": len(self.action_to_index) / config.POLICY_OUTPUT_SIZE,
+            "action_type": "MOVE_RING_ONLY",
         }
 
 
@@ -102,14 +93,14 @@ def get_action_mapper() -> YinshActionMapper:
 
 def create_policy_vector(actions: List[YinshAction]) -> np.ndarray:
     """액션 리스트를 정책 벡터로 변환"""
-    mapper = get_action_mapper()
     policy = np.zeros(config.POLICY_OUTPUT_SIZE, dtype=np.float32)
-
+    mapper = get_action_mapper()
+    
     for action in actions:
         index = mapper.get_action_index(action)
-        if index is not None and index < config.POLICY_OUTPUT_SIZE:
-            policy[index] = 1.0 / len(actions)  # 균등 분포
-
+        if index is not None:
+            policy[index] = 1.0
+    
     return policy
 
 
@@ -130,29 +121,31 @@ def get_valid_action_mask(valid_actions: List[YinshAction]) -> np.ndarray:
 
 def test_action_mapper():
     """액션 매퍼 테스트"""
-    print("🧪 Testing YINSH Action Mapper...")
-
+    print("🧪 Testing Simplified Action Mapper...")
+    
     mapper = get_action_mapper()
-
-    # 기본 테스트
-    env = YinshEnv()
-    valid_actions = env.get_valid_actions()
-
-    print(f"├── Valid actions: {len(valid_actions)}")
-    print(f"├── Mapped actions: {len(mapper.action_to_index)}")
-    print(f"└── Policy output size: {config.POLICY_OUTPUT_SIZE}")
-
-    # 매핑 테스트
-    for i, action in enumerate(valid_actions[:5]):  # 처음 5개만 테스트
+    stats = mapper.get_mapping_stats()
+    
+    print(f"📊 Mapping Stats:")
+    print(f"   ├── Total Actions: {stats['total_actions']}")
+    print(f"   ├── Policy Output Size: {stats['policy_output_size']}")
+    print(f"   ├── Coverage: {stats['coverage']:.2%}")
+    print(f"   └── Action Type: {stats['action_type']}")
+    
+    # 몇 개의 액션 테스트
+    test_actions = [
+        YinshAction(from_pos=(0, 0), to_pos=(1, 1)),
+        YinshAction(from_pos=(5, 5), to_pos=(6, 6)),
+        YinshAction(from_pos=(10, 10), to_pos=(9, 9)),
+    ]
+    
+    for action in test_actions:
         index = mapper.get_action_index(action)
         if index is not None:
-            reconstructed_action = mapper.get_index_action(index)
-            print(f"├── Action {i}: {action} -> {index} -> {reconstructed_action}")
-
-    # 마스크 테스트
-    mask = mapper.get_valid_action_mask(valid_actions)
-    print(f"├── Valid mask sum: {mask.sum()}")
-    print(f"└── Valid mask shape: {mask.shape}")
+            reconstructed = mapper.get_index_action(index)
+            print(f"✅ {action} -> {index} -> {reconstructed}")
+        else:
+            print(f"❌ {action} not found in mapping")
 
 
 if __name__ == "__main__":

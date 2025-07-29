@@ -1,15 +1,11 @@
-# config.py - YINSH AlphaZero Configuration
+# config.py - Simplified YINSH AlphaZero Configuration
 
 import os
 
 # ==== 게임 설정 ====
 BOARD_SIZE = 11  # YINSH는 11x11 육각형 보드
-INPUT_SHAPE = (
-    11,
-    11,
-    11,
-)  # (channels, height, width) - 11 layers for different game states
-POLICY_OUTPUT_SIZE = 200  # 가능한 액션 수 (링 배치 + 링 이동)
+INPUT_SHAPE = (3, 11, 11)  # 간소화: (channels, height, width) - 3 layers for simplified game states
+POLICY_OUTPUT_SIZE = 121  # 간소화: 11x11 = 121 (from_pos * to_pos)
 
 # ==== MCTS 설정 ====
 MCTS_SIMULATIONS = 400  # 수당 MCTS 시뮬레이션 횟수
@@ -40,8 +36,8 @@ os.makedirs(MEMORY_DIR, exist_ok=True)
 os.makedirs(MODEL_FOLDER, exist_ok=True)
 os.makedirs(LOSS_PLOTS_FOLDER, exist_ok=True)
 
-# ==== YINSH 게임 규칙 설정 ====
-RINGS_PER_PLAYER = 5  # 각 플레이어당 링 개수
+# ==== 간소화된 YINSH 게임 규칙 설정 ====
+RINGS_PER_PLAYER = 5  # 각 플레이어당 링 개수 (초기 배치)
 RINGS_TO_WIN = 3  # 승리에 필요한 링 제거 개수
 LINE_LENGTH_TO_WIN = 5  # 연속된 마커 5개로 라인 완성
 
