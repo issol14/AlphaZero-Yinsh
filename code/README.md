@@ -1,6 +1,22 @@
 # YINSH AlphaZero
 
 YINSH 게임을 위한 AlphaZero 기반 강화학습 구현체입니다. PyTorch를 사용하여 구현되었습니다.
+| 채널 번호 | 실제 의미            | 값                                    |
+| ----- | ---------------- | ------------------------------------ |
+| 0     | 현재 플레이어의 링 위치    | 1.0 (링 위치), 0.0 (그 외)                |
+| 1     | 현재 플레이어의 마커 위치   | 1.0 (마커 위치), 0.0 (그 외)               |
+| 2     | 상대 플레이어의 링 위치    | 1.0 (링 위치), 0.0 (그 외)                |
+| 3     | 상대 플레이어의 마커 위치   | 1.0 (마커 위치), 0.0 (그 외)               |
+| 4     | 현재 플레이어 표시       | 1.0 (흰색), 0.0 (검은색)                  |
+| 5     | 게임 단계            | 0.0 (링 배치), 0.5 (메인 게임), 1.0 (라인 제거) |
+| 6     | 흰색 플레이어 배치한 링 수  | 0.0 \~ 1.0 (정규화: 배치 수 / 5)           |
+| 7     | 검은색 플레이어 배치한 링 수 | 0.0 \~ 1.0 (정규화: 배치 수 / 5)           |
+| 8     | 흰색 플레이어 제거한 링 수  | 0.0 \~ 1.0 (정규화: 제거 수 / 3)           |
+| 9     | 검은색 플레이어 제거한 링 수 | 0.0 \~ 1.0 (정규화: 제거 수 / 3)           |
+| 10    | 마커 풀 상태          | 0.0 \~ 1.0 (정규화: 남은 마커 / 51)         |
+| 11    | 보드 위 마커 수        | 0.0 \~ 1.0 (정규화: 보드 마커 / 51)         |
+| 12    | 유효한 보드 위치        | 1.0 (유효 위치), 0.0 (무효 위치)             |
+
 
 ## 🎯 프로젝트 개요
 
@@ -74,6 +90,41 @@ python debug_game.py
 # 병렬 성능 테스트
 python test_parallel.py
 ```
+
+### 3. Selfplay 최적화 실행
+
+```bash
+# 빠른 selfplay (적은 시뮬레이션, 최소 로깅)
+python scripts/selfplay.py --model models/best_model.pt --games 100 --mcts-sims 200 --fast
+
+# 초고속 selfplay (매우 적은 시뮬레이션, 로깅 없음)
+python scripts/selfplay.py --model models/best_model.pt --games 200 --mcts-sims 100 --ultra-fast
+
+# 성능 벤치마크
+python scripts/performance_monitor.py --model models/best_model.pt --benchmark parallel --games 10 --workers 8
+```
+
+### 4. 성능 최적화 팁
+
+#### MCTS 시뮬레이션 수 조정
+- **Selfplay용**: 200-400 시뮬레이션 (빠른 학습)
+- **평가용**: 800 시뮬레이션 (정확한 평가)
+- **초고속**: 100 시뮬레이션 (매우 빠른 테스트)
+
+#### 병렬 처리 최적화
+- **CPU 코어 수에 맞춰 워커 수 설정**
+- **GPU 메모리 사용량 제한** (80% 권장)
+- **메모리 캐시 활용** (중복 계산 방지)
+
+#### MCTS 병렬화
+- **`--parallel-mcts`**: CPU 멀티스레딩으로 MCTS 병렬화
+- **`--mcts-threads 4`**: MCTS 스레드 수 설정 (CPU 코어 수에 맞춤)
+- **예상 성능 향상**: 2-4배 (CPU 코어 수에 따라)
+
+#### 로깅 최소화
+- **`--fast`**: 최소 로깅으로 성능 향상
+- **`--ultra-fast`**: 로깅 없이 최대 성능
+- **`--show-board`**: 보드 표시 비활성화로 속도 향상
 
 ## 📚 AlphaZero 학습 완전 가이드
 
@@ -283,6 +334,33 @@ python scripts/pipeline.py \
     --continue-training \
     --cleanup-data
 ```
+
+### 5. AlphaZero 논문 기반 학습
+
+#### 개선된 학습 파라미터
+- **학습률**: 0.002 (논문 기준, 기존 0.001에서 증가)
+- **배치 크기**: 512 (논문 기준, 기존 32에서 대폭 증가)
+- **에포크 수**: 100 (논문 기준, 기존 10에서 증가)
+- **옵티마이저**: SGD with momentum (논문 기준)
+- **손실 함수**: KL divergence for policy, MSE for value
+
+#### 학습 실행
+```bash
+# AlphaZero 논문 기반 학습
+python scripts/train.py --data memory --epochs 100 --batch-size 512 --lr 0.002
+
+# 학습 모니터링
+python scripts/training_monitor.py --model models/trained_model.pt --data memory --eval-games 20
+
+# 학습 곡선 분석
+python scripts/training_monitor.py --model models/trained_model.pt --log-file training_log.json
+```
+
+#### 학습 최적화 팁
+- **충분한 데이터**: 최소 10,000개 포지션 권장
+- **정규화**: 드롭아웃과 L2 정규화 사용
+- **학습률 스케줄링**: 400k 스텝마다 0.1배 감소
+- **그래디언트 클리핑**: max_norm=1.0으로 설정
 
 ## 🎯 **권장 실행 시퀀스**
 

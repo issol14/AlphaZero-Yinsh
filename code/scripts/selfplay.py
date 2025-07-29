@@ -30,7 +30,7 @@ from yinsh.mapper import YinshActionMapper
 
 
 def run_single_game_parallel(game_config: Dict) -> Dict:
-    """병렬 실행용 단일 게임 실행 함수"""
+    """병렬 실행용 단일 게임 실행 함수 (최적화된 버전)"""
     try:
         game_id = game_config['game_id']
         model_path = game_config['model_path']
@@ -39,28 +39,47 @@ def run_single_game_parallel(game_config: Dict) -> Dict:
         use_mcts = game_config['use_mcts']
         show_board = game_config['show_board']
         
-        # 디바이스 설정
+        # 디바이스 설정 (GPU 메모리 최적화)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
-        # GPU 메모리 정리
+        # GPU 메모리 정리 및 최적화
         if device == 'cuda':
             torch.cuda.empty_cache()
+            torch.cuda.set_per_process_memory_fraction(0.8)  # GPU 메모리 사용량 제한
         
         print(f"🎮 [Worker {os.getpid()}] Game {game_id + 1} starting...")
         
-        # 에이전트 생성
-        agent1 = YinshAgent(model_path=model_path, use_mcts=use_mcts, device=device)
-        agent2 = YinshAgent(model_path=model_path, use_mcts=use_mcts, device=device)
+        # 에이전트 생성 (메모리 효율적)
+        agent1 = YinshAgent(
+            model_path=model_path, 
+            use_mcts=use_mcts, 
+            use_parallel_mcts=game_config.get('use_parallel_mcts', False),
+            device=device
+        )
+        agent2 = YinshAgent(
+            model_path=model_path, 
+            use_mcts=use_mcts, 
+            use_parallel_mcts=game_config.get('use_parallel_mcts', False),
+            device=device
+        )
         
-        # MCTS 시뮬레이션 수 설정
+        # Selfplay용 빠른 MCTS 설정
         if use_mcts:
-            agent1.mcts_agent.mcts.num_simulations = mcts_sims
-            agent2.mcts_agent.mcts.num_simulations = mcts_sims
+            # Selfplay용으로 시뮬레이션 수 조정
+            fast_sims = min(mcts_sims, config.SELFPLAY_MCTS_SIMULATIONS)
+            agent1.mcts_agent.mcts.num_simulations = fast_sims
+            agent2.mcts_agent.mcts.num_simulations = fast_sims
+            
+            # 병렬 MCTS 스레드 수 설정
+            if game_config.get('use_parallel_mcts', False):
+                num_threads = game_config.get('mcts_threads', 4)
+                agent1.mcts_agent.mcts.num_threads = num_threads
+                agent2.mcts_agent.mcts.num_threads = num_threads
         
         game_start_time = time.time()
         
-        # 게임 실행
-        game_history, winner, turns = play_game(agent1, agent2, game_id=game_id, show_board=show_board)
+        # 게임 실행 (최적화된 버전)
+        game_history, winner, turns = play_game_optimized(agent1, agent2, game_id=game_id, show_board=show_board)
         
         # 훈련 데이터 생성
         training_data = generate_training_data(game_history, winner, game_id=game_id)
@@ -108,7 +127,9 @@ def run_parallel_games(args):
             'output_dir': args.output,
             'mcts_sims': args.mcts_sims,
             'use_mcts': not args.no_mcts,
-            'show_board': args.show_board
+            'show_board': args.show_board,
+            'use_parallel_mcts': args.parallel_mcts,
+            'mcts_threads': args.mcts_threads
         }
         for i in range(args.games)
     ]
@@ -288,6 +309,98 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
     return game_history, winner, turn_count
 
 
+def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
+    """최적화된 게임 실행 함수 (빠른 selfplay용)"""
+    env = YinshEnv()
+    game_history = []
+    turn_count = 0
+    game_start_time = time.time()
+    
+    # 로깅 최소화 (성능 향상)
+    verbose = show_board
+    
+    while not env.is_game_over() and turn_count < max_turns:
+        current_player = agent1 if env.current_player == Color.WHITE else agent2
+        player_name = "WHITE" if env.current_player == Color.WHITE else "BLACK"
+        
+        if verbose:
+            print(f"  Turn {turn_count + 1}: {player_name} 플레이어 턴")
+
+        # 현재 상태 저장 (최적화된 버전)
+        try:
+            state = env.get_state_tensor()
+        except Exception as e:
+            if verbose:
+                print(f"    ❌ 상태 텐서 생성 실패: {e}")
+            return game_history, None, turn_count
+
+        # 액션 선택 (최적화된 버전)
+        try:
+            if verbose:
+                print(f"    🤔 액션 선택 중...")
+            
+            action_start_time = time.time()
+            action, action_info = current_player.select_action(env)
+            action_time = time.time() - action_start_time
+            
+            if verbose:
+                print(f"    ✅ 액션 선택 완료: {action} (소요시간: {action_time:.2f}초)")
+            
+        except Exception as e:
+            if verbose:
+                print(f"    ❌ 액션 선택 실패: {e}")
+            return game_history, None, turn_count
+
+        # 액션 실행
+        try:
+            if verbose:
+                print(f"    🎯 액션 실행 중: {action}")
+            
+            env.step(action)
+            
+            if verbose:
+                print(f"    ✅ 액션 실행 완료")
+                if show_board:
+                    display_action_details(action, action_info)
+                    display_board(env, f"Turn {turn_count + 1} - {player_name} 플레이 후")
+                    print("-" * 40)
+            
+        except Exception as e:
+            if verbose:
+                print(f"    ❌ 액션 실행 실패: {e}")
+            return game_history, None, turn_count
+
+        # 게임 히스토리에 추가 (최적화된 버전)
+        game_history.append({
+            "state": state, 
+            "action": action, 
+            "player": env.current_player,
+            "action_info": action_info
+        })
+
+        turn_count += 1
+
+    # 게임 결과 (최적화된 버전)
+    try:
+        winner = env.get_winner()
+        game_time = time.time() - game_start_time
+        
+        if verbose:
+            winner_name = "WHITE" if winner == Color.WHITE else "BLACK" if winner == Color.BLACK else "DRAW"
+            print(f"\n🏁 Game {game_id + 1} 완료!")
+            print(f"   승자: {winner_name}")
+            print(f"   총 턴 수: {turn_count}")
+            print(f"   총 게임 시간: {game_time:.2f}초")
+            print(f"   턴당 평균 시간: {game_time/max(turn_count, 1):.2f}초")
+        
+    except Exception as e:
+        if verbose:
+            print(f"❌ 게임 결과 확인 실패: {e}")
+        winner = None
+    
+    return game_history, winner, turn_count
+
+
 def extract_mcts_policy_distribution(action_info, action_mapper, executed_action):
     """MCTS 통계에서 4000차원 정책 분포 추출 (개선된 버전)"""
     policy = np.zeros(config.POLICY_OUTPUT_SIZE, dtype=np.float32)
@@ -456,10 +569,33 @@ def main():
     )
     parser.add_argument("--mcts-sims", type=int, default=800, help="MCTS simulations")
     parser.add_argument("--show-board", action="store_true", help="각 턴마다 보드 상태 출력")
-    parser.add_argument("--workers", type=int, default=1, help="병렬 워커 수 (1=순차실행)")
-    parser.add_argument("--parallel", action="store_true", help="병렬 실행 모드 활성화")
-
+    parser.add_argument("--workers", type=int, default=6,
+                       help="병렬 워커 수 (기본: 6)")
+    
+    # 빠른 모드 옵션 추가
+    parser.add_argument("--fast", action="store_true",
+                       help="빠른 selfplay 모드 (적은 시뮬레이션, 최소 로깅)")
+    parser.add_argument("--ultra-fast", action="store_true",
+                       help="초고속 selfplay 모드 (매우 적은 시뮬레이션, 로깅 없음)")
+    
+    # 병렬 MCTS 옵션 추가
+    parser.add_argument("--parallel-mcts", action="store_true",
+                       help="병렬 MCTS 사용 (CPU 멀티스레딩)")
+    parser.add_argument("--mcts-threads", type=int, default=4,
+                       help="병렬 MCTS 스레드 수 (기본: 4)")
+    
     args = parser.parse_args()
+    
+    # 빠른 모드 설정 적용
+    if args.fast:
+        args.mcts_sims = min(args.mcts_sims, 200)  # 시뮬레이션 수 감소
+        args.show_board = False  # 보드 표시 비활성화
+        print("⚡ 빠른 모드 활성화")
+    elif args.ultra_fast:
+        args.mcts_sims = min(args.mcts_sims, 100)  # 매우 적은 시뮬레이션
+        args.show_board = False  # 보드 표시 비활성화
+        args.workers = min(args.workers * 2, 12)  # 워커 수 증가
+        print("🚀 초고속 모드 활성화")
 
     print("🎮 Starting Enhanced YINSH AlphaZero Self-Play...")
     print(f"📋 설정:")
@@ -469,7 +605,7 @@ def main():
     print(f"   출력 디렉토리: {args.output}")
     print(f"   보드 출력: {'Enabled' if args.show_board else 'Disabled'}")
     print(f"   디바이스: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
-    print(f"   실행 모드: {'Parallel' if args.parallel and args.workers > 1 else 'Sequential'}")
+    print(f"   실행 모드: {'Parallel' if args.parallel_mcts and args.mcts_threads > 1 else 'Sequential'}")
     print(f"   워커 수: {args.workers}")
 
     # 에이전트 생성 (현재 인터페이스에 맞게)
@@ -508,8 +644,8 @@ def main():
     print("=" * 50)
 
     # 병렬 실행 모드 확인
-    if args.parallel and args.workers > 1:
-        print(f"\n🚀 병렬 모드로 {args.games}개 게임을 {args.workers}개 워커로 실행")
+    if args.parallel_mcts and args.mcts_threads > 1:
+        print(f"\n🚀 병렬 MCTS 모드로 {args.games}개 게임을 {args.mcts_threads}개 스레드로 실행")
         run_parallel_games(args)
         return
     

@@ -7,7 +7,8 @@ from typing import Tuple, Dict, List, Optional
 from pathlib import Path
 
 from .model import YinshNet, YinshModelBuilder
-from .mcts import MCTSAgent
+from .mcts_optimized import OptimizedMCTSAgent as MCTSAgent
+from .mcts_parallel import ParallelMCTSAgent as ParallelMCTSAgent
 from .env import YinshEnv, YinshAction, Color, GamePhase
 from .mapper import YinshActionMapper
 from . import config
@@ -20,12 +21,14 @@ class YinshAgent:
         self,
         model_path: Optional[str] = None,
         use_mcts: bool = True,
+        use_parallel_mcts: bool = False,
         device: Optional[str] = None,
     ):
         """
         Args:
             model_path: 사전 훈련된 모델 경로
             use_mcts: MCTS 사용 여부
+            use_parallel_mcts: 병렬 MCTS 사용 여부
             device: PyTorch 디바이스 ('cuda', 'cpu', 또는 None=자동선택)
         """
         # 디바이스 설정
@@ -47,13 +50,27 @@ class YinshAgent:
 
         # MCTS 에이전트 설정
         self.use_mcts = use_mcts
+        self.use_parallel_mcts = use_parallel_mcts
+        
         if use_mcts:
-            mcts_config = {
-                "c_puct": config.CPUCT,
-                "num_simulations": config.MCTS_SIMULATIONS,
-            }
-            self.mcts_agent = MCTSAgent(self.neural_network, mcts_config)
-            print(f"🌳 MCTS enabled with {config.MCTS_SIMULATIONS} simulations")
+            if use_parallel_mcts:
+                # 병렬 MCTS 설정
+                mcts_config = {
+                    "c_puct": config.CPUCT,
+                    "num_simulations": config.MCTS_SIMULATIONS,
+                    "num_threads": 4,  # CPU 코어 수에 맞게 조정
+                    "batch_size": 32
+                }
+                self.mcts_agent = ParallelMCTSAgent(self.neural_network, mcts_config)
+                print(f"🌳 Parallel MCTS enabled with {config.MCTS_SIMULATIONS} simulations, {mcts_config['num_threads']} threads")
+            else:
+                # 일반 MCTS 설정
+                mcts_config = {
+                    "c_puct": config.CPUCT,
+                    "num_simulations": config.MCTS_SIMULATIONS,
+                }
+                self.mcts_agent = MCTSAgent(self.neural_network, mcts_config)
+                print(f"🌳 MCTS enabled with {config.MCTS_SIMULATIONS} simulations")
         else:
             self.mcts_agent = None
             print(f"🚀 Direct neural network prediction (no MCTS)")

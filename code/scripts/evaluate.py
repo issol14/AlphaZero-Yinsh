@@ -26,25 +26,34 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from yinsh import YinshEnv, YinshAgent, Color, config
 from yinsh.game import YinshGame
+from yinsh.mapper import YinshActionMapper
+
+# selfplay.py의 정책 추출 함수 import (경로 수정)
+try:
+    from scripts.selfplay import extract_mcts_policy_distribution
+except ImportError:
+    # 상대 경로로 시도
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+    from selfplay import extract_mcts_policy_distribution
 
 
 class ModelEvaluator:
     """모델 평가를 담당하는 클래스"""
     
-    def __init__(self, evaluation_games: int = 100, mcts_sims: int = 400):
+    def __init__(self, evaluation_games: int = 100, mcts_sims: int = None):
         """
         Args:
             evaluation_games: 평가에 사용할 게임 수
-            mcts_sims: MCTS 시뮬레이션 수 (평가 시에는 빠른 진행을 위해 적게)
+            mcts_sims: MCTS 시뮬레이션 수 (None이면 config에서 가져옴)
         """
         self.evaluation_games = evaluation_games
-        self.mcts_sims = mcts_sims
+        self.mcts_sims = mcts_sims if mcts_sims is not None else config.EVALUATION_MCTS_SIMULATIONS
         self.results = []
         
     def evaluate_models(self, candidate_model_path: str, best_model_path: str = None,
                        threshold: float = 0.55, save_results: bool = True) -> dict:
         """
-        두 모델을 평가하여 새 모델 채택 여부 결정
+        두 모델을 평가하여 새 모델 채택 여부 결정 (최적화된 버전)
         
         Args:
             candidate_model_path: 새로운 후보 모델 경로
@@ -55,7 +64,7 @@ class ModelEvaluator:
         Returns:
             평가 결과 딕셔너리
         """
-        print(f"\n🏆 모델 평가 시작")
+        print(f"\n🏆 모델 평가 시작 (최적화된 버전)")
         print(f"📋 설정:")
         print(f"   후보 모델: {candidate_model_path}")
         print(f"   기존 모델: {best_model_path if best_model_path else 'Random baseline'}")
@@ -81,23 +90,23 @@ class ModelEvaluator:
             )
             print("   ✅ 기존 모델 로드 완료")
             
-            # MCTS 시뮬레이션 수 조정 (평가 시에는 더 빠르게)
+            # MCTS 시뮬레이션 수 조정 (평가 시에도 빠르게)
             if hasattr(candidate_agent, 'mcts_agent') and candidate_agent.mcts_agent:
-                candidate_agent.mcts_agent.num_simulations = self.mcts_sims
+                candidate_agent.mcts_agent.mcts.num_simulations = self.mcts_sims
             if hasattr(best_agent, 'mcts_agent') and best_agent.mcts_agent:
-                best_agent.mcts_agent.num_simulations = self.mcts_sims
+                best_agent.mcts_agent.mcts.num_simulations = self.mcts_sims
                 
         except Exception as e:
             print(f"❌ 에이전트 초기화 실패: {e}")
             return None
         
-        # 평가 게임 진행
+        # 평가 게임 진행 (최적화된 버전)
         candidate_as_white_wins = 0
         candidate_as_black_wins = 0
         draws = 0
         total_game_time = 0
         
-        print(f"\n🎮 {self.evaluation_games}게임 평가 시작...")
+        print(f"\n🎮 {self.evaluation_games}게임 평가 시작 (최적화된 버전)...")
         
         for game_id in tqdm(range(self.evaluation_games), desc="평가 진행"):
             game_start_time = time.time()
@@ -115,24 +124,41 @@ class ModelEvaluator:
                 candidate_is_white = False
             
             try:
-                # 게임 진행
-                game = YinshGame(white_agent, black_agent)
-                winner_value = game.play_one_game(stochastic=False)  # 평가시에는 결정적
+                # 최적화된 게임 진행 (selfplay와 동일한 방식)
+                game_history, winner, turns = self._play_game_optimized(
+                    white_agent, black_agent, game_id=game_id
+                )
+                
+                # 정책 추출 (selfplay와 동일한 방식)
+                if game_history:
+                    action_mapper = YinshActionMapper()
+                    for move in game_history:
+                        action = move["action"]
+                        action_info = move["action_info"]
+                        
+                        # selfplay와 동일한 정책 추출 사용
+                        policy = extract_mcts_policy_distribution(action_info, action_mapper, action)
+                        if policy is not None:
+                            # 정책 추출 성공 (MCTS 사용)
+                            pass
+                        else:
+                            # 정책 추출 실패 (Direct NN 사용)
+                            pass
                 
                 # 승자 결정
-                winner = None
-                if winner_value > 0:
-                    winner = Color.WHITE
-                elif winner_value < 0:
-                    winner = Color.BLACK
+                winner_value = None
+                if winner == Color.WHITE:
+                    winner_value = 1
+                elif winner == Color.BLACK:
+                    winner_value = -1
                 else:
-                    winner = None  # 무승부
+                    winner_value = 0  # 무승부
                 
                 # 결과 기록
-                if winner is None:
+                if winner_value == 0:
                     draws += 1
-                elif (winner == Color.WHITE and candidate_is_white) or \
-                     (winner == Color.BLACK and not candidate_is_white):
+                elif (winner_value > 0 and candidate_is_white) or \
+                     (winner_value < 0 and not candidate_is_white):
                     if candidate_is_white:
                         candidate_as_white_wins += 1
                     else:
@@ -149,7 +175,7 @@ class ModelEvaluator:
                     'candidate_won': (winner == Color.WHITE and candidate_is_white) or 
                                    (winner == Color.BLACK and not candidate_is_white),
                     'game_time': game_time,
-                    'turns': game.moves_played if hasattr(game, 'moves_played') else 0
+                    'turns': turns
                 }
                 self.results.append(game_result)
                 
@@ -197,6 +223,52 @@ class ModelEvaluator:
             self._save_evaluation_results(evaluation_result)
         
         return evaluation_result
+    
+    def _play_game_optimized(self, agent1, agent2, game_id=0):
+        """최적화된 게임 실행 함수 (selfplay와 동일한 방식)"""
+        env = YinshEnv()
+        game_history = []
+        turn_count = 0
+        max_turns = 200
+        
+        while not env.is_game_over() and turn_count < max_turns:
+            current_player = agent1 if env.current_player == Color.WHITE else agent2
+            
+            try:
+                # 현재 상태 저장 (selfplay와 동일)
+                state = env.get_state_tensor()
+                
+                # 액션 선택 (평가용 온도 사용)
+                action, action_info = current_player.select_action(
+                    env, 
+                    temperature=config.EVALUATION_TEMPERATURE,  # 0.1
+                    add_noise=False  # 평가시에는 노이즈 없음
+                )
+                
+                # 액션 실행
+                env.step(action)
+                
+                # 게임 히스토리에 추가 (selfplay와 동일한 방식)
+                game_history.append({
+                    "state": state, 
+                    "action": action, 
+                    "player": env.current_player,
+                    "action_info": action_info
+                })
+                
+                turn_count += 1
+                
+            except Exception as e:
+                print(f"❌ 게임 {game_id + 1} 턴 {turn_count + 1} 실패: {e}")
+                return None, None, turn_count
+        
+        # 게임 결과
+        try:
+            winner = env.get_winner()
+            return game_history, winner, turn_count
+        except Exception as e:
+            print(f"❌ 게임 {game_id + 1} 결과 확인 실패: {e}")
+            return None, None, turn_count
     
     def _print_evaluation_results(self, result: dict):
         """평가 결과를 콘솔에 출력"""
@@ -253,8 +325,8 @@ def main():
                        help="평가 게임 수")
     parser.add_argument("--threshold", type=float, default=0.55,
                        help="새 모델 채택을 위한 최소 승률 (0.0-1.0)")
-    parser.add_argument("--mcts-sims", type=int, default=400,
-                       help="MCTS 시뮬레이션 수 (평가용)")
+    parser.add_argument("--mcts-sims", type=int, default=None,
+                       help="MCTS 시뮬레이션 수 (평가용, 비워두면 config에서 가져옴)")
     parser.add_argument("--no-save", action="store_true",
                        help="결과 파일 저장 안함")
     
@@ -276,7 +348,7 @@ def main():
     # 평가 실행
     evaluator = ModelEvaluator(
         evaluation_games=args.games,
-        mcts_sims=args.mcts_sims
+        mcts_sims=args.mcts_sims if args.mcts_sims is not None else config.EVALUATION_MCTS_SIMULATIONS
     )
     
     result = evaluator.evaluate_models(

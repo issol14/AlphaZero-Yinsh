@@ -1,0 +1,32 @@
+# YINSH Online Game Server Dependencies
+# =====================================
+
+# 기존 YINSH 의존성
+torch
+numpy
+matplotlib
+pandas
+pillow
+tqdm
+
+# FastAPI 및 웹 서버 의존성
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# 추가 유틸리티
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# 개발 도구
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# 로깅 및 모니터링
+structlog==23.2.0
+prometheus-client==0.19.0
+
+# 보안
+python-dotenv==1.0.0 

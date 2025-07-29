@@ -186,9 +186,10 @@ class YinshEnv:
 
         # 마커 풀 관리는 실시간 계산으로 처리 (property 사용)
 
-        # 라인 제거 시스템 (새로 추가)
-        self.pending_line_removals = []  # 제거 대기 중인 라인들
-        self.line_removal_player = None  # 라인을 제거해야 하는 플레이어
+        # 라인 제거 시스템 (전면 재설계)
+        self.line_removal_queue = []  # 제거해야 하는 플레이어들의 순서 (Color 리스트)
+        self.removable_lines = {Color.WHITE: [], Color.BLACK: []}  # 각 플레이어의 제거가능한 라인들
+        self.move_player = Color.WHITE  # 실제로 움직인 플레이어 (라인 제거 후 턴 전환용)
 
         self.game_history = []
         self.move_count = 0
@@ -254,8 +255,7 @@ class YinshEnv:
         for pos in positions:
             if pos in self.marker_positions[color]:
                 self.marker_positions[color].remove(pos)
-        self.markers_in_pool += len(positions)
-        self.markers_on_board -= len(positions)
+        # markers_in_pool과 markers_on_board는 @property로 자동 계산되므로 수동 업데이트 불필요
 
     def _is_valid_hex_direction(self, dx: int, dy: int) -> bool:
         """육각형 보드의 유효한 6방향인지 확인"""
@@ -272,46 +272,116 @@ class YinshEnv:
         
         return (norm_dx, norm_dy) in config.VALID_HEX_DIRECTIONS
 
-    def get_valid_actions(self) -> List[YinshAction]:
-        """현재 상태에서 유효한 액션들을 반환"""
+    def generate_dynamic_place_ring_actions(self) -> List[YinshAction]:
+        """동적으로 링 배치 액션 생성 (최적화된 버전)"""
         actions = []
+        
+        if not config.USE_DYNAMIC_ACTIONS:
+            return self._get_static_place_ring_actions()
+            
+        # 실제로 배치 가능한 위치만 생성
+        for hex_pos in self.valid_points:
+            array_pos = self.hex_to_array_coords(hex_pos)
+            if self.is_empty_position(array_pos) and not self._has_marker_at(array_pos):
+                actions.append(YinshAction("PLACE_RING", to_pos=array_pos))
+                
+        return actions[:config.MAX_DYNAMIC_ACTIONS]
+    
+    def generate_dynamic_move_ring_actions(self) -> List[YinshAction]:
+        """동적으로 링 이동 액션 생성 (현재 플레이어 소유 링만)"""
+        actions = []
+        
+        if not config.USE_DYNAMIC_ACTIONS:
+            return self._get_static_move_ring_actions()
+            
+        # 현재 플레이어의 링만 고려
+        player_rings = self.ring_positions[self.current_player]
+        
+        for from_pos in player_rings:
+            # 가능한 이동 위치 계산
+            valid_moves = self.get_valid_ring_moves(from_pos)
+            for to_pos in valid_moves:
+                actions.append(YinshAction("MOVE_RING", from_pos=from_pos, to_pos=to_pos))
+                    
+        return actions[:config.MAX_DYNAMIC_ACTIONS]
+    
+    def generate_dynamic_remove_line_actions(self) -> List[YinshAction]:
+        """동적으로 라인 제거 액션 생성 (현재 플레이어 소유 링과 라인만)"""
+        actions = []
+        
+        if not config.USE_DYNAMIC_ACTIONS:
+            return self._get_static_remove_line_actions()
+            
+        # 현재 플레이어의 제거 가능한 라인들
+        current_lines = self.removable_lines[self.current_player]
+        # 현재 플레이어의 링들
+        player_rings = self.ring_positions[self.current_player]
+        
+        for line in current_lines:
+            if len(line) >= config.LINE_LENGTH_TO_WIN:
+                for i in range(len(line) - config.LINE_LENGTH_TO_WIN + 1):
+                    remove_positions = line[i:i+config.LINE_LENGTH_TO_WIN]
+                    # 실제 소유 링만 제거 후보로 사용
+                    for ring_pos in player_rings:
+                        actions.append(YinshAction(
+                            "REMOVE_LINE",
+                            remove_line_positions=remove_positions,
+                            remove_ring_position=ring_pos
+                        ))
+                        
+        return actions[:config.MAX_DYNAMIC_ACTIONS]
+    
+    def _get_static_place_ring_actions(self) -> List[YinshAction]:
+        """정적 매핑 방식의 링 배치 액션 (호환성용)"""
+        actions = []
+        for x in range(self.board_size):
+            for y in range(self.board_size):
+                pos = (x, y)
+                if self.is_empty_position(pos) and not self._has_marker_at(pos):
+                    actions.append(YinshAction("PLACE_RING", to_pos=pos))
+        return actions
+    
+    def _get_static_move_ring_actions(self) -> List[YinshAction]:
+        """정적 매핑 방식의 링 이동 액션 (호환성용)"""
+        # 현재 get_valid_actions의 MAIN_GAME 부분과 동일한 로직
+        actions = []
+        player_rings = self.ring_positions[self.current_player]
+        for from_pos in player_rings:
+            valid_moves = self.get_valid_ring_moves(from_pos)
+            for to_pos in valid_moves:
+                actions.append(YinshAction("MOVE_RING", from_pos=from_pos, to_pos=to_pos))
+        return actions
+    
+    def _get_static_remove_line_actions(self) -> List[YinshAction]:
+        """정적 매핑 방식의 라인 제거 액션 (호환성용)"""
+        # 현재 get_valid_actions의 LINE_REMOVAL 부분과 동일한 로직  
+        actions = []
+        current_lines = self.removable_lines[self.current_player]
+        for line in current_lines:
+            if len(line) >= config.LINE_LENGTH_TO_WIN:
+                for i in range(len(line) - config.LINE_LENGTH_TO_WIN + 1):
+                    remove_positions = line[i:i+config.LINE_LENGTH_TO_WIN]
+                    for ring_pos in self.ring_positions[self.current_player]:
+                        actions.append(YinshAction(
+                            "REMOVE_LINE",
+                            remove_line_positions=remove_positions,
+                            remove_ring_position=ring_pos
+                        ))
+        return actions
 
+    def get_valid_actions(self) -> List[YinshAction]:
+        """현재 상태에서 유효한 액션들을 반환 (최적화된 버전)"""
+        
         if self.phase == GamePhase.PLACE_RINGS:
-            # 링 배치 단계 - 마커가 있는 곳에는 링을 둘 수 없음
-            for x in range(self.board_size):
-                for y in range(self.board_size):
-                    pos = (x, y)
-                    if self.is_empty_position(pos) and not self._has_marker_at(pos):
-                        actions.append(YinshAction("PLACE_RING", to_pos=pos))
+            return self.generate_dynamic_place_ring_actions()
         
         elif self.phase == GamePhase.LINE_REMOVAL:
-            # 라인 제거 액션들
-            if self.pending_line_removals:
-                line = self.pending_line_removals[0]
-                # 5개 연속 라인에서 가능한 5개 조합들 생성
-                if len(line) >= config.LINE_LENGTH_TO_WIN:
-                    for i in range(len(line) - config.LINE_LENGTH_TO_WIN + 1):
-                        remove_positions = line[i:i+config.LINE_LENGTH_TO_WIN]
-                        # 제거할 링 선택
-                        for ring_pos in self.ring_positions[self.current_player]:
-                            actions.append(YinshAction(
-                                "REMOVE_LINE",
-                                remove_line_positions=remove_positions,
-                                remove_ring_position=ring_pos
-                            ))
+            return self.generate_dynamic_remove_line_actions()
         
         elif self.phase == GamePhase.MAIN_GAME:
-            # 메인 게임 단계 - 링 이동
-            for ring_pos in self.ring_positions[self.current_player]:
-                valid_moves = self.get_valid_ring_moves(ring_pos)
-                for to_pos in valid_moves:
-                    actions.append(YinshAction(
-                        "MOVE_RING", 
-                        from_pos=ring_pos, 
-                        to_pos=to_pos
-                    ))
-
-        return actions
+            return self.generate_dynamic_move_ring_actions()
+        
+        return []
 
     def is_valid_ring_move(
         self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]
@@ -406,18 +476,17 @@ class YinshEnv:
         # 게임 종료 조건 확인
         self._check_game_end()
 
-        # 플레이어 교체 (수정된 로직)
+        # 플레이어 교체 (새로운 라인 제거 플로우)
         if not self.done:
             if self.phase == GamePhase.LINE_REMOVAL:
-                # 라인 제거 완료 후 원래 게임으로 복귀하고 다른 색 라인도 체크
-                self.phase = GamePhase.MAIN_GAME
-                self._check_for_remaining_lines()
-                # 라인 제거 후에는 플레이어 변경하지 않음 (같은 플레이어 계속)
-            else:
-                # 일반적인 플레이어 교체
+                self._continue_line_removal_process()
+            elif self.phase == GamePhase.PLACE_RINGS:
+                # 링 배치 단계에서는 단순 교체
                 self.current_player = (
                     Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
                 )
+            # MAIN_GAME에서는 _move_ring이 _start_line_removal_process를 호출하므로
+            # 여기서 추가 처리 불필요
 
         return True
 
@@ -456,34 +525,81 @@ class YinshEnv:
         # 경로상의 마커들 뒤집기
         self._flip_markers_on_path(from_pos, to_pos)
 
-        # 5연속 라인 체크 (새로운 시스템)
-        self._check_for_lines_and_handle()
+        # 라인 제거 프로세스 시작 (새로운 플로우)
+        self._start_line_removal_process()
 
-    def _check_for_lines_and_handle(self):
-        """5연속 라인 체크 및 처리 순서 관리"""
-        white_lines = self._find_lines(Color.WHITE)
-        black_lines = self._find_lines(Color.BLACK)
+    def _start_line_removal_process(self):
+        """라인 제거 프로세스 시작 - 올바른 Yinsh 플로우 구현"""
+        # 현재 움직인 플레이어 저장
+        self.move_player = self.current_player
         
-        # 양쪽 모두 5연속이 생겼을 때
-        if white_lines and black_lines:
-            # 방금 움직인 플레이어부터 처리
-            if self.current_player == Color.WHITE:
-                self._initiate_line_removal(Color.WHITE, white_lines[0])
-            else:
-                self._initiate_line_removal(Color.BLACK, black_lines[0])
-        # 한쪽만 5연속
-        elif white_lines:
-            self._initiate_line_removal(Color.WHITE, white_lines[0])
-        elif black_lines:
-            self._initiate_line_removal(Color.BLACK, black_lines[0])
+        # 모든 플레이어의 제거가능한 라인 체크
+        self.removable_lines[Color.WHITE] = self._find_lines(Color.WHITE)
+        self.removable_lines[Color.BLACK] = self._find_lines(Color.BLACK)
+        
+        # 제거 가능한 플레이어들을 큐에 추가 (현재 플레이어부터)
+        self.line_removal_queue = []
+        if self.removable_lines[self.current_player]:
+            self.line_removal_queue.append(self.current_player)
+        
+        other_player = Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
+        if self.removable_lines[other_player]:
+            self.line_removal_queue.append(other_player)
+        
+        # 제거할 라인이 있으면 LINE_REMOVAL 단계로 전환
+        if self.line_removal_queue:
+            self.phase = GamePhase.LINE_REMOVAL
+            self.current_player = self.line_removal_queue[0]
+        # 제거할 라인이 없으면 바로 다음 플레이어 턴으로
+        else:
+            self._end_line_removal_process()
 
-    def _initiate_line_removal(self, color: Color, line: List[Tuple[int, int]]):
-        """라인 제거 프로세스 시작"""
-        self.phase = GamePhase.LINE_REMOVAL
-        self.line_removal_player = color
-        self.pending_line_removals = [line]
-        # 현재 플레이어를 라인 제거해야 하는 플레이어로 변경
-        self.current_player = color
+    def _end_line_removal_process(self):
+        """라인 제거 프로세스 종료 - 다음 플레이어 턴으로"""
+        self.phase = GamePhase.MAIN_GAME
+        self.line_removal_queue = []
+        self.removable_lines = {Color.WHITE: [], Color.BLACK: []}
+        
+        # 다음 플레이어로 턴 전환
+        self.current_player = Color.BLACK if self.move_player == Color.WHITE else Color.WHITE
+
+    def _continue_line_removal_process(self):
+        """라인 제거 프로세스 계속 진행"""
+        # 현재 플레이어의 제거 가능한 라인 업데이트
+        self.removable_lines[self.current_player] = self._find_lines(self.current_player)
+        
+        # 현재 플레이어에게 더 이상 제거할 라인이 없으면 큐에서 제거
+        if not self.removable_lines[self.current_player]:
+            if self.current_player in self.line_removal_queue:
+                self.line_removal_queue.remove(self.current_player)
+        
+        # 큐에서 다음 플레이어 찾기
+        if self.line_removal_queue:
+            # 현재 플레이어가 여전히 큐에 있으면 계속, 아니면 다음 플레이어
+            if self.current_player not in self.line_removal_queue:
+                self.current_player = self.line_removal_queue[0]
+        else:
+            # 큐가 비었으면 모든 플레이어 다시 체크
+            self._check_all_players_for_lines()
+    
+    def _check_all_players_for_lines(self):
+        """모든 플레이어의 제거 가능한 라인 재검사"""
+        # 모든 플레이어의 제거가능한 라인 다시 체크
+        self.removable_lines[Color.WHITE] = self._find_lines(Color.WHITE)
+        self.removable_lines[Color.BLACK] = self._find_lines(Color.BLACK)
+        
+        # 새로운 큐 구성 (현재 플레이어부터)
+        self.line_removal_queue = []
+        if self.removable_lines[self.current_player]:
+            self.line_removal_queue.append(self.current_player)
+        
+        other_player = Color.BLACK if self.current_player == Color.WHITE else Color.WHITE
+        if self.removable_lines[other_player]:
+            self.line_removal_queue.append(other_player)
+        
+        # 더 이상 제거할 라인이 없으면 라인 제거 프로세스 종료
+        if not self.line_removal_queue:
+            self._end_line_removal_process()
 
     def _handle_marker_exhaustion(self):
         """마커 51개 소진 시 처리"""
@@ -514,15 +630,7 @@ class YinshEnv:
             self.board[x, y] = 0
             self.rings_removed[self.current_player] += 1
 
-    def _check_for_remaining_lines(self):
-        """라인 제거 후에도 남아있는 라인이 있는지 확인"""
-        for color in [Color.WHITE, Color.BLACK]:
-            lines = self._find_lines(color)
-            if lines:
-                # 라인이 남아있으면 다시 라인 제거 단계로 전환
-                self.phase = GamePhase.LINE_REMOVAL
-                self.line_removal_player = color
-                break
+
 
     def _flip_markers_on_path(self, from_pos: Tuple[int, int], to_pos: Tuple[int, int]):
         """링 이동 경로상의 마커들을 뒤집음"""
@@ -548,29 +656,55 @@ class YinshEnv:
                     break
 
     def _find_lines(self, color: Color) -> List[List[Tuple[int, int]]]:
-        """해당 색깔의 5개 연속 라인을 찾음 (수정된 버전)"""
+        """해당 색깔의 5개 이상 연속 라인을 찾음 (중복 제거 버전)"""
         lines = []
         markers = self.marker_positions[color]
+        processed_positions = set()  # 이미 처리된 위치들
 
-        # 올바른 6방향
+        # 3방향만 사용 (6방향의 방향 쌍에서 하나씩만 선택하여 중복 방지)
+        directions = [(0, 1), (1, 0), (1, 1)]  # 세로, 가로, 대각선 (각 쌍의 정방향만)
+        
         for start_pos in markers:
-            for dx, dy in config.VALID_HEX_DIRECTIONS:
-                line = [start_pos]
-                current_pos = start_pos
-
-                # 한 방향으로 계속 체크
-                for _ in range(4):  # 5개 라인이므로 4번 더 체크
-                    next_pos = (current_pos[0] + dx, current_pos[1] + dy)
-                    if next_pos in markers:
-                        line.append(next_pos)
-                        current_pos = next_pos
-                    else:
-                        break
-
-                if len(line) >= config.LINE_LENGTH_TO_WIN:
-                    lines.append(line[:config.LINE_LENGTH_TO_WIN])
+            if start_pos in processed_positions:
+                continue
+                
+            for dx, dy in directions:
+                # 양방향으로 확장하여 최대 길이 라인 찾기
+                full_line = self._find_max_line_in_direction(start_pos, dx, dy, markers)
+                
+                # 5개 이상일 때만 유효한 라인
+                if len(full_line) >= config.LINE_LENGTH_TO_WIN:
+                    lines.append(full_line)
+                    # 이 라인의 모든 위치를 처리됨으로 표시
+                    processed_positions.update(full_line)
 
         return lines
+    
+    def _find_max_line_in_direction(self, start_pos: Tuple[int, int], dx: int, dy: int, markers: set) -> List[Tuple[int, int]]:
+        """주어진 방향에서 최대 길이 라인 찾기 (양방향 확장)"""
+        line = [start_pos]
+        
+        # 정방향으로 확장
+        current_pos = start_pos
+        while True:
+            next_pos = (current_pos[0] + dx, current_pos[1] + dy)
+            if next_pos in markers:
+                line.append(next_pos)
+                current_pos = next_pos
+            else:
+                break
+        
+        # 역방향으로 확장
+        current_pos = start_pos
+        while True:
+            prev_pos = (current_pos[0] - dx, current_pos[1] - dy)
+            if prev_pos in markers:
+                line.insert(0, prev_pos)  # 앞쪽에 추가
+                current_pos = prev_pos
+            else:
+                break
+        
+        return line
 
     def _check_game_end(self):
         """게임 종료 조건 체크 (완전한 버전)"""
@@ -622,7 +756,7 @@ class YinshEnv:
 
     def get_state_tensor(self) -> np.ndarray:
         """현재 상태를 신경망 입력용 텐서로 변환 (확장된 버전)"""
-        state = np.zeros((13, self.board_size, self.board_size), dtype=np.float32)  # 11->13 채널로 확장
+        state = np.zeros((15, self.board_size, self.board_size), dtype=np.float32)  # 13->15 채널로 확장
 
         # 채널 0-1: 현재 플레이어의 링과 마커
         current_color = self.current_player
@@ -673,6 +807,20 @@ class YinshEnv:
                 if self.is_valid_position((x, y)):
                     state[12, x, y] = 1.0
 
+        # 채널 13-14: 제거 가능한 라인 정보 (새로 추가)
+        if self.phase == GamePhase.LINE_REMOVAL:
+            # 채널 13: 현재 플레이어의 제거 가능한 라인들
+            for line in self.removable_lines[current_color]:
+                for pos in line:
+                    x, y = pos
+                    state[13, x, y] = 1.0
+            
+            # 채널 14: 상대 플레이어의 제거 가능한 라인들
+            for line in self.removable_lines[opponent_color]:
+                for pos in line:
+                    x, y = pos
+                    state[14, x, y] = 1.0
+
         return state
 
     def get_state_string(self) -> str:
@@ -687,10 +835,12 @@ class YinshEnv:
                 "phase": self.phase.value,  # GamePhase enum
                 "rings_placed": dict(self.rings_placed),
                 "rings_removed": dict(self.rings_removed),
-                "markers_in_pool": self.markers_in_pool,  # 새로 추가
-                "markers_on_board": self.markers_on_board,  # 새로 추가
-                "pending_line_removals": self.pending_line_removals,  # 새로 추가
-                "line_removal_player": self.line_removal_player.value if self.line_removal_player else None,  # 새로 추가
+                "markers_in_pool": self.markers_in_pool,
+                "markers_on_board": self.markers_on_board,
+                "line_removal_queue": [color.value for color in self.line_removal_queue],  # 새로운 시스템
+                "removable_lines_white": [sorted(line) for line in self.removable_lines[Color.WHITE]],  # 새로 추가
+                "removable_lines_black": [sorted(line) for line in self.removable_lines[Color.BLACK]],  # 새로 추가
+                "move_player": self.move_player.value,  # 새로 추가
             }
         )
 
@@ -713,9 +863,13 @@ class YinshEnv:
         new_env.done = self.done
         new_env.winner = self.winner
         
-        # 새로 추가된 필드들 (markers_in_pool, markers_on_board는 property로 자동 계산)
-        new_env.pending_line_removals = self.pending_line_removals.copy()
-        new_env.line_removal_player = self.line_removal_player
+        # 새로운 라인 제거 시스템 필드들 (markers_in_pool, markers_on_board는 property로 자동 계산)
+        new_env.line_removal_queue = self.line_removal_queue.copy()
+        new_env.removable_lines = {
+            Color.WHITE: [line.copy() for line in self.removable_lines[Color.WHITE]],
+            Color.BLACK: [line.copy() for line in self.removable_lines[Color.BLACK]]
+        }
+        new_env.move_player = self.move_player
         
         new_env.game_history = self.game_history.copy()
         new_env.move_count = self.move_count

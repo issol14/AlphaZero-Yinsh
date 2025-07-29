@@ -9,18 +9,20 @@ from . import config
 
 
 class ResidualBlock(nn.Module):
-    """잔차 블록 (ResNet 스타일)"""
+    """잔차 블록 (AlphaZero 논문 기반)"""
 
-    def __init__(self, channels):
+    def __init__(self, channels, dropout_rate=0.3):
         super(ResidualBlock, self).__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
+        self.dropout = nn.Dropout2d(dropout_rate)
 
     def forward(self, x):
         residual = x
         out = F.relu(self.bn1(self.conv1(x)))
+        out = self.dropout(out)
         out = self.bn2(self.conv2(out))
         out += residual
         out = F.relu(out)
@@ -28,15 +30,16 @@ class ResidualBlock(nn.Module):
 
 
 class YinshNet(nn.Module):
-    """YINSH 게임용 신경망 (AlphaZero 스타일)"""
+    """YINSH 게임용 신경망 (AlphaZero 논문 기반)"""
 
     def __init__(
         self,
-        input_channels: int = 13,  # 11 -> 13으로 확장
+        input_channels: int = 15,  # 15개 입력 채널
         board_size: int = 11,
-        num_res_blocks: int = 5,
-        num_filters: int = 64,
+        num_res_blocks: int = 20,  # AlphaZero 논문: 체스 20, 바둑 40
+        num_filters: int = 256,  # AlphaZero 논문: 256
         policy_output_dim: int = 4000,
+        dropout_rate: float = 0.3,
     ):
         super(YinshNet, self).__init__()
 
@@ -49,28 +52,30 @@ class YinshNet(nn.Module):
         )
         self.bn1 = nn.BatchNorm2d(num_filters)
 
-        # 잔차 블록들
+        # 잔차 블록들 (AlphaZero 논문 기반)
         self.res_blocks = nn.Sequential(
-            *[ResidualBlock(num_filters) for _ in range(num_res_blocks)]
+            *[ResidualBlock(num_filters, dropout_rate) for _ in range(num_res_blocks)]
         )
 
-        # 정책 헤드 (Policy Head)
+        # 정책 헤드 (Policy Head) - AlphaZero 논문 기반
         self.policy_conv = nn.Conv2d(num_filters, 2, kernel_size=1, bias=False)
         self.policy_bn = nn.BatchNorm2d(2)
         self.policy_fc = nn.Linear(2 * board_size * board_size, policy_output_dim)
+        self.policy_dropout = nn.Dropout(dropout_rate)
 
-        # 가치 헤드 (Value Head)
+        # 가치 헤드 (Value Head) - AlphaZero 논문 기반
         self.value_conv = nn.Conv2d(num_filters, 1, kernel_size=1, bias=False)
         self.value_bn = nn.BatchNorm2d(1)
         self.value_fc1 = nn.Linear(board_size * board_size, 256)
         self.value_fc2 = nn.Linear(256, 1)
+        self.value_dropout = nn.Dropout(dropout_rate)
 
     def forward(self, x):
         """
-        Forward pass
+        Forward pass (AlphaZero 논문 기반)
 
         Args:
-            x: (batch_size, 13, 11, 11) - YINSH 게임 상태 텐서
+            x: (batch_size, 15, 11, 11) - YINSH 게임 상태 텐서
 
         Returns:
             policy_logits: (batch_size, 4000) - 액션 확률 분포 (log softmax)
@@ -80,15 +85,17 @@ class YinshNet(nn.Module):
         x = F.relu(self.bn1(self.conv1(x)))
         x = self.res_blocks(x)
 
-        # 정책 헤드
+        # 정책 헤드 (AlphaZero 논문 기반)
         p = F.relu(self.policy_bn(self.policy_conv(x)))
         p = p.view(p.size(0), -1)  # flatten
+        p = self.policy_dropout(p)
         p = F.log_softmax(self.policy_fc(p), dim=1)
 
-        # 가치 헤드
+        # 가치 헤드 (AlphaZero 논문 기반)
         v = F.relu(self.value_bn(self.value_conv(x)))
         v = v.view(v.size(0), -1)  # flatten
         v = F.relu(self.value_fc1(v))
+        v = self.value_dropout(v)
         v = torch.tanh(self.value_fc2(v))
 
         return p, v
@@ -135,13 +142,14 @@ class YinshModelBuilder:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def build_model(self) -> YinshNet:
-        """새로운 YINSH 모델 생성"""
+        """새로운 YINSH 모델 생성 (AlphaZero 논문 기반)"""
         model = YinshNet(
-            input_channels=13,  # 확장된 채널 수
+            input_channels=15,  # 15개 입력 채널
             board_size=config.BOARD_SIZE,
-            num_res_blocks=config.AMOUNT_OF_RESIDUAL_BLOCKS,
-            num_filters=config.CONVOLUTION_FILTERS,
+            num_res_blocks=20,  # AlphaZero 논문: 체스 20, 바둑 40
+            num_filters=256,  # AlphaZero 논문: 256
             policy_output_dim=config.POLICY_OUTPUT_SIZE,
+            dropout_rate=0.3,  # AlphaZero 논문 기반 드롭아웃
         )
 
         model = model.to(self.device)
@@ -149,13 +157,39 @@ class YinshModelBuilder:
         return model
 
     def load_model(self, model_path: str) -> YinshNet:
-        """저장된 모델 로드"""
+        """저장된 모델 로드 (구조 불일치 시 새로 초기화)"""
         model = self.build_model()
 
         try:
-            state_dict = torch.load(model_path, map_location=self.device)
+            loaded_data = torch.load(model_path, map_location=self.device)
+            
+            # 모델 전체가 로드된 경우 state_dict 추출
+            if isinstance(loaded_data, dict):
+                state_dict = loaded_data
+            else:
+                # 모델 전체가 로드된 경우
+                print("⚠️  전체 모델이 로드되었습니다. state_dict로 변환합니다.")
+                if hasattr(loaded_data, 'state_dict'):
+                    state_dict = loaded_data.state_dict()
+                else:
+                    raise ValueError("로드된 데이터가 state_dict도 모델도 아닙니다.")
+            
+            # 구조 체크
+            current_state_dict = model.state_dict()
+            if state_dict['conv1.weight'].shape != current_state_dict['conv1.weight'].shape:
+                print(f"⚠️ 모델 구조 불일치!")
+                print(f"   기존: {state_dict['conv1.weight'].shape}")
+                print(f"   현재: {current_state_dict['conv1.weight'].shape}")
+                print("🔄 새 모델로 초기화합니다.")
+                
+                # 필요시 파일도 덮어쓰기
+                self.save_model(model, model_path)
+                return model
+
+            # 구조가 일치하면 정상 로드
             model.load_state_dict(state_dict)
             print(f"✅ Model loaded from {model_path}")
+            
         except Exception as e:
             print(f"❌ Error loading model: {e}")
             print("🔄 Using random initialized model")
@@ -193,7 +227,7 @@ class YinshModelBuilder:
 
 
 def create_yinsh_model() -> YinshNet:
-    """편의 함수: 새로운 YINSH 모델 생성"""
+    """편의 함수: 새로운 YINSH 모델 생성 (개선된 아키텍처)"""
     builder = YinshModelBuilder()
     return builder.build_model()
 

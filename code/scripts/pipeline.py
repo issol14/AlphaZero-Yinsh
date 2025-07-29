@@ -177,12 +177,31 @@ class AlphaZeroPipeline:
         if self.config.get('parallel', False) and self.config.get('workers', 1) > 1:
             cmd.extend(["--parallel", "--workers", str(self.config['workers'])])
         
+        # 추가 최적화 옵션
+        if self.config.get('fast_mode', False):
+            cmd.append("--fast")
+        if self.config.get('ultra_fast_mode', False):
+            cmd.append("--ultra-fast")
+        if self.config.get('parallel_mcts', False):
+            cmd.extend(["--parallel-mcts", "--mcts-threads", str(self.config.get('mcts_threads', 4))])
+        
         try:
             self.log(f"   명령어: {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=Path.cwd(), capture_output=True, text=True)
             
             if result.returncode == 0:
                 self.log(f"✅ Self-Play 완료")
+                
+                # 데이터 폴더 확인
+                data_output = self.data_dir / f"iter_{iteration}"
+                if data_output.exists():
+                    data_files = list(data_output.glob("*.pt"))
+                    self.log(f"   생성된 데이터 파일: {len(data_files)}개")
+                    for file in data_files[:5]:  # 처음 5개만 표시
+                        self.log(f"     {file.name}")
+                else:
+                    self.log(f"❌ Self-Play 데이터 폴더가 생성되지 않음: {data_output}")
+                
                 self.total_games_played += self.config['selfplay_games']
                 return True
             else:
@@ -213,6 +232,12 @@ class AlphaZeroPipeline:
             "--output", str(output_dir)
         ]
         
+        # 훈련 최적화 옵션 추가
+        if self.config.get('training_optimization', False):
+            cmd.extend(["--num-workers", str(self.config.get('training_workers', 4))])
+        if self.config.get('mixed_precision', False):
+            cmd.append("--mixed-precision")
+        
         # 기존 best 모델이 있으면 이어서 훈련
         best_model_path = self.model_manager.get_best_model_path()
         if best_model_path and self.config['continue_training']:
@@ -221,6 +246,19 @@ class AlphaZeroPipeline:
         try:
             self.log(f"   명령어: {' '.join(cmd)}")
             result = subprocess.run(cmd, cwd=Path.cwd(), capture_output=True, text=True)
+            
+            # 상세한 출력 로그 추가
+            self.log(f"   train.py 반환 코드: {result.returncode}")
+            if result.stdout:
+                self.log(f"   train.py stdout:")
+                for line in result.stdout.split('\n')[:10]:  # 처음 10줄만
+                    if line.strip():
+                        self.log(f"     {line}")
+            if result.stderr:
+                self.log(f"   train.py stderr:")
+                for line in result.stderr.split('\n')[:10]:  # 처음 10줄만
+                    if line.strip():
+                        self.log(f"     {line}")
             
             if result.returncode == 0:
                 # train.py가 생성하는 모델 경로
@@ -234,6 +272,12 @@ class AlphaZeroPipeline:
                     return str(final_model_path)
                 else:
                     self.log(f"❌ 훈련된 모델을 찾을 수 없음: {trained_model_path}")
+                    self.log(f"   출력 디렉토리 내용:")
+                    if output_dir.exists():
+                        for file in output_dir.iterdir():
+                            self.log(f"     {file.name}")
+                    else:
+                        self.log(f"     출력 디렉토리가 존재하지 않음: {output_dir}")
                     return None
             else:
                 self.log(f"❌ 모델 훈련 실패:")
@@ -258,6 +302,12 @@ class AlphaZeroPipeline:
             "--threshold", str(self.config['evaluation_threshold']),
             "--mcts-sims", str(self.config['evaluation_mcts_sims'])
         ]
+        
+        # 평가 최적화 옵션 추가
+        if self.config.get('evaluation_parallel', False):
+            cmd.extend(["--parallel", "--workers", str(self.config.get('evaluation_workers', 4))])
+        if self.config.get('evaluation_fast', False):
+            cmd.append("--fast")
         
         if best_path:
             cmd.extend(["--best", best_path])
@@ -391,6 +441,16 @@ class AlphaZeroPipeline:
                 self.log(f"   성공적 업데이트: {self.successful_updates}")
                 self.log(f"   총 게임 수: {self.total_games_played:,}")
                 
+                # Iteration 간 메모리 최적화
+                if self.config.get('memory_optimization', False):
+                    try:
+                        import subprocess
+                        subprocess.run([
+                            "uv", "run", "python", "scripts/memory_optimizer.py", "--mode", "between"
+                        ], cwd=Path.cwd(), capture_output=True)
+                    except Exception as e:
+                        self.log(f"⚠️ 메모리 최적화 실패: {e}")
+                
         except KeyboardInterrupt:
             self.log("\n⏹️ 사용자에 의해 파이프라인이 중단되었습니다.")
         except Exception as e:
@@ -445,21 +505,21 @@ def main():
                        help="Self-play MCTS 시뮬레이션 수")
     
     # 훈련 설정
-    parser.add_argument("--training-epochs", type=int, default=10,
+    parser.add_argument("--training-epochs", type=int, default=100,  # AlphaZero 논문: 100
                        help="훈련 epoch 수")
-    parser.add_argument("--training-batch-size", type=int, default=32,
+    parser.add_argument("--training-batch-size", type=int, default=512,  # AlphaZero 논문: 512
                        help="훈련 배치 크기")
-    parser.add_argument("--training-lr", type=float, default=0.001,
+    parser.add_argument("--training-lr", type=float, default=0.002,  # AlphaZero 논문: 0.002
                        help="학습률")
     parser.add_argument("--continue-training", action="store_true",
                        help="기존 모델에서 이어서 훈련")
     
     # 평가 설정
-    parser.add_argument("--evaluation-games", type=int, default=100,
+    parser.add_argument("--evaluation-games", type=int, default=400,  # AlphaZero 논문: 400게임
                        help="모델 평가 게임 수")
     parser.add_argument("--evaluation-threshold", type=float, default=0.55,
                        help="새 모델 채택 승률 기준")
-    parser.add_argument("--evaluation-mcts-sims", type=int, default=400,
+    parser.add_argument("--evaluation-mcts-sims", type=int, default=800,  # AlphaZero 논문: 정확한 평가
                        help="평가 MCTS 시뮬레이션 수")
     
     # 디렉토리 설정

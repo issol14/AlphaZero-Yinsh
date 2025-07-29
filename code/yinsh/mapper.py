@@ -20,21 +20,46 @@ class YinshActionMapper:
             "REMOVE_LINE": (0, 0)
         }
         
+        # 효율성을 위한 valid_points 캐시
+        self._valid_points_cache = None
+        
         self._build_mapping()
+
+    def _get_valid_positions(self):
+        """유효한 보드 위치들을 반환 (캐시 사용)"""
+        if self._valid_points_cache is None:
+            # 임시 env 인스턴스로 valid_points 가져오기
+            temp_env = YinshEnv()
+            self._valid_points_cache = []
+            for hex_pos in temp_env.valid_points:
+                array_pos = temp_env.hex_to_array_coords(hex_pos)
+                self._valid_points_cache.append(array_pos)
+        return self._valid_points_cache
 
     def _build_mapping(self):
         """효율적인 액션 매핑 구축"""
         index = 0
 
-        # 1. 링 배치 액션 (11x11 = 121개)
+        # 1. 링 배치 액션 (최적화: valid_points 사용)
         start_place = index
-        for x in range(config.BOARD_SIZE):
-            for y in range(config.BOARD_SIZE):
+        if config.USE_VALID_POINTS_ONLY:
+            # 유효한 위치만 사용 (85개)
+            valid_positions = self._get_valid_positions()
+            for x, y in valid_positions:
                 action = YinshAction("PLACE_RING", to_pos=(x, y))
                 action_hash = self._hash_action(action)
                 self.action_to_index[action_hash] = index
                 self.index_to_action[index] = action
                 index += 1
+        else:
+            # 기존 방식: 전체 보드 (121개)
+            for x in range(config.BOARD_SIZE):
+                for y in range(config.BOARD_SIZE):
+                    action = YinshAction("PLACE_RING", to_pos=(x, y))
+                    action_hash = self._hash_action(action)
+                    self.action_to_index[action_hash] = index
+                    self.index_to_action[index] = action
+                    index += 1
         self.action_ranges["PLACE_RING"] = (start_place, index - 1)
 
         # 2. 링 이동 액션 (효율적인 매핑)
@@ -102,9 +127,10 @@ class YinshActionMapper:
                     
                     # 정확히 5개일 때만 유효한 라인
                     if len(line_positions) == config.LINE_LENGTH_TO_WIN:
-                        # 각 링 위치에 대해 액션 생성
-                        for ring_x in range(config.BOARD_SIZE):
-                            for ring_y in range(config.BOARD_SIZE):
+                        # 각 링 위치에 대해 액션 생성 (최적화: valid_points만 사용)
+                        if config.USE_VALID_POINTS_ONLY:
+                            valid_positions = self._get_valid_positions()
+                            for ring_x, ring_y in valid_positions:
                                 ring_pos = (ring_x, ring_y)
                                 action = YinshAction(
                                     "REMOVE_LINE",
@@ -118,6 +144,23 @@ class YinshActionMapper:
                                 
                                 if index >= config.POLICY_OUTPUT_SIZE:
                                     return
+                        else:
+                            # 기존 방식: 전체 보드 순회
+                            for ring_x in range(config.BOARD_SIZE):
+                                for ring_y in range(config.BOARD_SIZE):
+                                    ring_pos = (ring_x, ring_y)
+                                    action = YinshAction(
+                                        "REMOVE_LINE",
+                                        remove_line_positions=line_positions,
+                                        remove_ring_position=ring_pos
+                                    )
+                                    action_hash = self._hash_action(action)
+                                    self.action_to_index[action_hash] = index
+                                    self.index_to_action[index] = action
+                                    index += 1
+                                    
+                                    if index >= config.POLICY_OUTPUT_SIZE:
+                                        return
         
     def _hash_action(self, action: YinshAction) -> str:
         """액션을 고유 해시로 변환"""
