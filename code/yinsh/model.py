@@ -45,6 +45,7 @@ class YinshNet(nn.Module):
 
         self.board_size = board_size
         self.policy_output_dim = policy_output_dim
+        self.device = torch.device('cpu')  # 기본값
 
         # 초기 합성곱층
         self.conv1 = nn.Conv2d(
@@ -69,6 +70,11 @@ class YinshNet(nn.Module):
         self.value_fc1 = nn.Linear(board_size * board_size, 256)
         self.value_fc2 = nn.Linear(256, 1)
         self.value_dropout = nn.Dropout(dropout_rate)
+
+    def to(self, device):
+        """디바이스 이동 시 device 속성도 업데이트"""
+        self.device = device
+        return super().to(device)
 
     def forward(self, x):
         """

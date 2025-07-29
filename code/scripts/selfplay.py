@@ -310,93 +310,60 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
 
 
 def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
-    """최적화된 게임 실행 함수 (빠른 selfplay용)"""
+    """최적화된 게임 실행 (빠른 버전)"""
+    print(f"🎮 Game {game_id + 1} 시작 (최적화된 버전)")
+    
     env = YinshEnv()
     game_history = []
     turn_count = 0
-    game_start_time = time.time()
     
-    # 로깅 최소화 (성능 향상)
-    verbose = show_board
+    print(f"   🎯 최대 턴 수: {max_turns}")
     
     while not env.is_game_over() and turn_count < max_turns:
-        current_player = agent1 if env.current_player == Color.WHITE else agent2
-        player_name = "WHITE" if env.current_player == Color.WHITE else "BLACK"
+        current_player = env.current_player
+        agent = agent1 if current_player == Color.BLACK else agent2
         
-        if verbose:
-            print(f"  Turn {turn_count + 1}: {player_name} 플레이어 턴")
-
-        # 현재 상태 저장 (최적화된 버전)
-        try:
-            state = env.get_state_tensor()
-        except Exception as e:
-            if verbose:
-                print(f"    ❌ 상태 텐서 생성 실패: {e}")
-            return game_history, None, turn_count
-
-        # 액션 선택 (최적화된 버전)
-        try:
-            if verbose:
-                print(f"    🤔 액션 선택 중...")
-            
-            action_start_time = time.time()
-            action, action_info = current_player.select_action(env)
-            action_time = time.time() - action_start_time
-            
-            if verbose:
-                print(f"    ✅ 액션 선택 완료: {action} (소요시간: {action_time:.2f}초)")
-            
-        except Exception as e:
-            if verbose:
-                print(f"    ❌ 액션 선택 실패: {e}")
-            return game_history, None, turn_count
-
-        # 액션 실행
-        try:
-            if verbose:
-                print(f"    🎯 액션 실행 중: {action}")
-            
-            env.step(action)
-            
-            if verbose:
-                print(f"    ✅ 액션 실행 완료")
-                if show_board:
-                    display_action_details(action, action_info)
-                    display_board(env, f"Turn {turn_count + 1} - {player_name} 플레이 후")
-                    print("-" * 40)
-            
-        except Exception as e:
-            if verbose:
-                print(f"    ❌ 액션 실행 실패: {e}")
-            return game_history, None, turn_count
-
-        # 게임 히스토리에 추가 (최적화된 버전)
-        game_history.append({
-            "state": state, 
-            "action": action, 
-            "player": env.current_player,
+        print(f"   📝 Turn {turn_count + 1}: {current_player.name} 플레이어")
+        
+        # 현재 상태 저장
+        state = env.get_state()
+        print(f"      상태 형태: {state.shape if hasattr(state, 'shape') else type(state)}")
+        
+        # 액션 선택
+        action = agent.select_action(env)
+        print(f"      선택된 액션: {action}")
+        
+        # 액션 정보 수집
+        action_info = {}
+        if hasattr(agent, 'mcts_agent') and agent.mcts_agent is not None:
+            # MCTS 통계 수집
+            mcts_stats = agent.mcts_agent.get_last_stats()
+            if mcts_stats:
+                action_info["method"] = "mcts"  # <-- 이 줄을 추가하세요!
+                action_info["mcts_stats"] = mcts_stats
+                print(f"       MCTS 통계 수집: {len(mcts_stats)}개 항목")
+        
+        # 게임 히스토리에 추가
+        move_data = {
+            "state": state,
+            "action": action,
+            "player": current_player,
             "action_info": action_info
-        })
-
+        }
+        game_history.append(move_data)
+        print(f"      ✅ Turn {turn_count + 1} 히스토리 추가 완료")
+        
+        # 액션 실행
+        env.step(action)
         turn_count += 1
-
-    # 게임 결과 (최적화된 버전)
-    try:
-        winner = env.get_winner()
-        game_time = time.time() - game_start_time
         
-        if verbose:
-            winner_name = "WHITE" if winner == Color.WHITE else "BLACK" if winner == Color.BLACK else "DRAW"
-            print(f"\n🏁 Game {game_id + 1} 완료!")
-            print(f"   승자: {winner_name}")
-            print(f"   총 턴 수: {turn_count}")
-            print(f"   총 게임 시간: {game_time:.2f}초")
-            print(f"   턴당 평균 시간: {game_time/max(turn_count, 1):.2f}초")
-        
-    except Exception as e:
-        if verbose:
-            print(f"❌ 게임 결과 확인 실패: {e}")
-        winner = None
+        if show_board:
+            display_compact_board(env)
+    
+    winner = env.get_winner()
+    print(f"   🏁 게임 종료: {winner.name if winner else 'DRAW'}")
+    print(f"   📊 총 턴 수: {turn_count}")
+    print(f"   📈 게임 히스토리 길이: {len(game_history)}")
     
     return game_history, winner, turn_count
 
@@ -464,6 +431,8 @@ def extract_mcts_policy_distribution(action_info, action_mapper, executed_action
 def generate_training_data(game_history, winner, game_id=0):
     """게임 히스토리에서 고품질 훈련 데이터 생성"""
     print(f"\n📊 Game {game_id + 1} 훈련 데이터 생성 중...")
+    print(f"   🔍 게임 히스토리 길이: {len(game_history)}")
+    print(f"   🏆 승자: {winner.name if winner else 'DRAW'}")
     
     training_data = []
     action_mapper = YinshActionMapper()
@@ -472,13 +441,22 @@ def generate_training_data(game_history, winner, game_id=0):
 
     for i, move in enumerate(game_history):
         try:
+            print(f"   📝 Turn {i+1} 처리 중...")
+            
             state = move["state"]
             action = move["action"]
             player = move["player"]
             action_info = move["action_info"]
+            
+            print(f"      상태 형태: {state.shape if hasattr(state, 'shape') else type(state)}")
+            print(f"      액션: {action}")
+            print(f"      플레이어: {player}")
+            print(f"      액션 정보 키: {list(action_info.keys()) if isinstance(action_info, dict) else 'N/A'}")
 
             # MCTS 정책 분포 추출 시도 (환경 복원 없이)
             policy = extract_mcts_policy_distribution(action_info, action_mapper, action)
+            
+            print(f"      정책 추출 결과: {'성공' if policy is not None else '실패'}")
             
             # MCTS 정책 추출 실패 시 또는 Direct NN인 경우 원핫 인코딩
             if policy is None:
@@ -488,6 +466,7 @@ def generate_training_data(game_history, winner, game_id=0):
                     if action_index is not None:
                         policy[action_index] = 1.0
                         direct_policy_count += 1
+                        print(f"      ✅ Direct 정책 생성: 인덱스 {action_index}")
                     else:
                         # 매핑 실패 시 기본값 사용
                         policy[0] = 1.0
@@ -498,6 +477,7 @@ def generate_training_data(game_history, winner, game_id=0):
                     direct_policy_count += 1
             else:
                 mcts_policy_count += 1
+                print(f"      ✅ MCTS 정책 생성: {policy.shape}")
 
             # 가치 계산
             if winner is None:
@@ -506,16 +486,27 @@ def generate_training_data(game_history, winner, game_id=0):
                 value = 1.0
             else:
                 value = -1.0
+                
+            print(f"      가치: {value}")
 
             training_data.append({"state": state, "policy": policy, "value": value})
+            print(f"      ✅ Turn {i+1} 데이터 추가 완료")
             
         except Exception as e:
             print(f"      ❌ Turn {i+1} 데이터 생성 실패: {e}")
+            import traceback
+            print(f"      상세 오류: {traceback.format_exc()}")
             continue
 
     print(f"   ✅ 훈련 데이터 생성 완료: {len(training_data)}개 포지션")
     print(f"      MCTS 정책: {mcts_policy_count}개")
     print(f"      Direct 정책: {direct_policy_count}개")
+    
+    if len(training_data) == 0:
+        print(f"   ⚠️ 경고: 훈련 데이터가 비어있습니다!")
+        print(f"   🔍 게임 히스토리 상세:")
+        for i, move in enumerate(game_history[:5]):  # 처음 5개만
+            print(f"      Turn {i+1}: {list(move.keys())}")
     
     return training_data
 
@@ -523,6 +514,11 @@ def generate_training_data(game_history, winner, game_id=0):
 def save_game_data(training_data, output_dir, game_id):
     """게임 데이터 저장"""
     print(f"\n💾 Game {game_id + 1} 데이터 저장 중...")
+    print(f"   📊 훈련 데이터 개수: {len(training_data)}")
+    
+    if len(training_data) == 0:
+        print(f"   ❌ 저장할 훈련 데이터가 없습니다!")
+        return None
     
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -531,11 +527,21 @@ def save_game_data(training_data, output_dir, game_id):
         states = [data["state"] for data in training_data]
         policies = [data["policy"] for data in training_data]
         values = [data["value"] for data in training_data]
+        
+        print(f"   📈 데이터 분리 완료:")
+        print(f"      상태 개수: {len(states)}")
+        print(f"      정책 개수: {len(policies)}")
+        print(f"      가치 개수: {len(values)}")
 
         # PyTorch 텐서로 변환
         states_tensor = torch.FloatTensor(states)
         policies_tensor = torch.FloatTensor(policies)
         values_tensor = torch.FloatTensor(values)
+        
+        print(f"   🔄 텐서 변환 완료:")
+        print(f"      상태 텐서 형태: {states_tensor.shape}")
+        print(f"      정책 텐서 형태: {policies_tensor.shape}")
+        print(f"      가치 텐서 형태: {values_tensor.shape}")
 
         # 저장
         data = {
@@ -554,6 +560,8 @@ def save_game_data(training_data, output_dir, game_id):
         
     except Exception as e:
         print(f"   ❌ 저장 실패: {e}")
+        import traceback
+        print(f"   상세 오류: {traceback.format_exc()}")
         return None
 
 

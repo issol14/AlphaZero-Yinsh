@@ -175,7 +175,7 @@ class AlphaZeroPipeline:
         
         # 병렬 처리 옵션 추가
         if self.config.get('parallel', False) and self.config.get('workers', 1) > 1:
-            cmd.extend(["--parallel", "--workers", str(self.config['workers'])])
+            cmd.extend(["--parallel-mcts", "--workers", str(self.config['workers'])])
         
         # 추가 최적화 옵션
         if self.config.get('fast_mode', False):

@@ -14,11 +14,12 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 from contextlib import asynccontextmanager
+from pydantic import BaseModel
 
 # 프로젝트 루트 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
@@ -111,18 +112,28 @@ async def health_check():
 # 프론트엔드 호환 API 엔드포인트
 # ============================================================================
 
-@app.post("/process-board-state/", response_model=ProcessBoardStateResponse, tags=["Frontend"])
-async def process_board_state(compressed_state: str):
+
+class ProcessBoardStateRequest(BaseModel):
+    """보드 상태 처리 요청 모델"""
+    compressed_state: str
+@app.post("/process-board-state", response_model=ProcessBoardStateResponse, tags=["Frontend"])
+async def process_board_state(request: ProcessBoardStateRequest):
     """tesee.py 호환 보드 상태 처리 - AI 추론 수행"""
     try:
         frontend_service = get_frontend_service()
-        processed_state, ai_action, thinking_time = frontend_service.process_board_state(compressed_state)
+        processed_state, ai_action, thinking_time = frontend_service.process_board_state(
+            request.compressed_state
+        )
         
         return {"compressed_state": processed_state}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail="내부 서버 오류")
+    
+@app.post("/test")
+async def test():
+    return {"message": "Hello, World!"}
 
 # ============================================================================
 # 예외 처리
@@ -154,7 +165,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "server:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True,
+        port=8018,
+        # reload=True,
         log_level="info"
     ) 
