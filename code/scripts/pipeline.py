@@ -440,8 +440,7 @@ class AlphaZeroPipeline:
             # GPU 최적화 옵션
             if self.use_gpu_optimization:
                 cmd.extend([
-                    "--mixed-precision",  # FP16 training
-                    "--workers", "8"      # DataLoader workers
+                    "--mixed-precision"   # FP16 training (train.py는 --workers 지원 안함)
                 ])
             
             self.log(f"   실행 명령: {' '.join(cmd)}")
