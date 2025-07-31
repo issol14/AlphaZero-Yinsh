@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, HTTPException, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from models import ProcessBoardStateResponse
@@ -42,8 +43,12 @@ async def lifespan(app: FastAPI):
     print("🚀 YINSH Frontend API 서버 시작 중...")
     server_start_time = datetime.now()
     
-    # 프론트엔드 서비스 초기화
-    frontend_service = FrontendService()
+    # 프론트엔드 서비스 초기화 (Stateless AI)
+    model_path = os.environ.get("YINSH_MODEL_PATH", "/home/mori/lab/AlphaZero-Yinsh/main_experiment/model/best_model.pt")
+    frontend_service = FrontendService(model_path=model_path)
+    
+    print(f"🤖 AI 모델: {model_path}")
+    print("🎯 Stateless AI 서비스 준비 완료")
     
     print("✅ 서버 시작 완료!")
     yield
@@ -68,7 +73,8 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["localhost:3000", "http://localhost:3000"],
+    allow_origins=["https://df978b75027c.ngrok-free.app"],
+    # allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -118,18 +124,40 @@ class ProcessBoardStateRequest(BaseModel):
     compressed_state: str
 @app.post("/process-board-state", response_model=ProcessBoardStateResponse, tags=["Frontend"])
 async def process_board_state(request: ProcessBoardStateRequest):
-    """tesee.py 호환 보드 상태 처리 - AI 추론 수행"""
+    """Stateless AI 보드 상태 처리 - 현재 상태만으로 최적 액션 추론"""
     try:
+        request_start_time = time.time()
         frontend_service = get_frontend_service()
+        
+        print(f"\n🎯 새 AI 추론 요청 (요청 시간: {datetime.now().strftime('%H:%M:%S')})")
+        
+        # Stateless AI 추론 수행
         processed_state, ai_action, thinking_time = frontend_service.process_board_state(
             request.compressed_state
         )
         
-        return {"compressed_state": processed_state}
+        total_time = time.time() - request_start_time
+        
+        print(f"   📤 응답 전송 완료 (총 소요시간: {total_time:.3f}초)")
+        
+        # ProcessBoardStateResponse 모델 사용
+        response = ProcessBoardStateResponse(
+            compressed_state=processed_state,
+            ai_action=ai_action,
+            thinking_time=thinking_time,
+            success=True
+        )
+        
+        return response
+        
     except ValueError as e:
+        print(f"❌ 요청 검증 실패: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail="내부 서버 오류")
+        print(f"❌ AI 추론 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="AI 추론 중 오류 발생")
     
 @app.post("/test")
 async def test():
@@ -142,20 +170,30 @@ async def test():
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     """HTTP 예외 처리"""
-    return {
-        "success": False,
-        "error": exc.detail,
-        "status_code": exc.status_code
-    }
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error": exc.detail,
+            "status_code": exc.status_code
+        }
+    )
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request, exc):
     """일반 예외 처리"""
-    return {
-        "success": False,
-        "error": "내부 서버 오류",
-        "status_code": 500
-    }
+    print(f"❌ 서버 예외 발생: {exc}")
+    import traceback
+    traceback.print_exc()
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "내부 서버 오류",
+            "status_code": 500
+        }
+    )
 
 # ============================================================================
 # 서버 실행
@@ -164,7 +202,7 @@ async def general_exception_handler(request, exc):
 if __name__ == "__main__":
     uvicorn.run(
         "server:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8018,
         # reload=True,
         log_level="info"

@@ -9,7 +9,7 @@ from pathlib import Path
 from .model import YinshNet, YinshModelBuilder
 from .mcts_optimized import OptimizedMCTSAgent as MCTSAgent
 from .mcts_parallel import ParallelMCTSAgent as ParallelMCTSAgent
-from .env import YinshEnv, YinshAction, Color, GamePhase
+from .env import YinshEnv, YinshAction, Color
 from .mapper import YinshActionMapper
 from . import config
 
@@ -58,7 +58,7 @@ class YinshAgent:
                 mcts_config = {
                     "c_puct": config.CPUCT,
                     "num_simulations": config.MCTS_SIMULATIONS,
-                    "num_threads": 4,  # CPU 코어 수에 맞게 조정
+                    "num_threads": 6,  # CPU 코어 수에 맞게 조정
                     "batch_size": 32
                 }
                 self.mcts_agent = ParallelMCTSAgent(self.neural_network, mcts_config)
@@ -203,10 +203,10 @@ class YinshAgent:
         신경망으로 정책과 가치 예측
 
         Args:
-            state_tensor: (13, 11, 11) 게임 상태 텐서
+            state_tensor: (6, 11, 11) 게임 상태 텐서
 
         Returns:
-            policy_probs: (4000,) 액션 확률 분포
+            policy_probs: (1848,) 액션 확률 분포
             value: 위치 평가값 (-1 ~ +1)
         """
         return self.neural_network.predict(state_tensor)

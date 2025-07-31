@@ -158,20 +158,35 @@ class AlphaZeroPipeline:
             f.write(log_msg + '\n')
     
     def run_selfplay(self, model_path: str, iteration: int) -> bool:
-        """Self-play 데이터 생성"""
+        """Self-play 데이터 생성 (AlphaZero 논문 방식: 높은 품질)"""
         self.log(f"🎮 Self-Play 시작 (Iteration {iteration})")
         
         data_output = self.data_dir / f"iter_{iteration}"
         data_output.mkdir(exist_ok=True)
         
-        # Self-play 명령어 구성
+        # AlphaZero 논문 방식: 높은 품질의 Self-Play 데이터 생성
+        # - 더 많은 게임 수
+        # - 더 높은 MCTS 시뮬레이션
+        # - Dirichlet 노이즈 사용
+        games_per_iteration = self.config.get('games_per_iteration', self.config['selfplay_games'])
+        mcts_sims = self.config.get('selfplay_mcts_sims', 800)
+        
+        # Self-play 명령어 구성 (AlphaZero 논문 방식)
         cmd = [
             "uv", "run", "python", "scripts/selfplay.py",
-            "--games", str(self.config['selfplay_games']),
+            "--games", str(games_per_iteration),
             "--model", model_path,
-            "--mcts-sims", str(self.config['selfplay_mcts_sims']),
-            "--output", str(data_output)
+            "--mcts-sims", str(mcts_sims),
+            "--output", str(data_output),
+            "--gpu-batch",  # GPU 배치 처리 활성화
+            "--batch-size", "32",  # 적절한 배치 크기
+            "--workers", "6"  # 병렬 처리
         ]
+        
+        # AlphaZero 논문 방식: Dirichlet 노이즈 사용 (탐색 촉진)
+        if self.config.get('use_dirichlet_noise', True):
+            # Dirichlet 노이즈는 selfplay.py에서 자동으로 적용됨
+            self.log(f"   🎲 Dirichlet 노이즈 활성화")
         
         # 병렬 처리 옵션 추가
         if self.config.get('parallel', False) and self.config.get('workers', 1) > 1:
@@ -187,6 +202,11 @@ class AlphaZeroPipeline:
         
         try:
             self.log(f"   명령어: {' '.join(cmd)}")
+            self.log(f"   📊 Self-Play 설정:")
+            self.log(f"      게임 수: {games_per_iteration}")
+            self.log(f"      MCTS 시뮬레이션: {mcts_sims}")
+            self.log(f"      GPU 배치 처리: 활성화")
+            
             result = subprocess.run(cmd, cwd=Path.cwd(), capture_output=True, text=True)
             
             if result.returncode == 0:
@@ -202,7 +222,7 @@ class AlphaZeroPipeline:
                 else:
                     self.log(f"❌ Self-Play 데이터 폴더가 생성되지 않음: {data_output}")
                 
-                self.total_games_played += self.config['selfplay_games']
+                self.total_games_played += games_per_iteration
                 return True
             else:
                 self.log(f"❌ Self-Play 실패:")
@@ -215,17 +235,43 @@ class AlphaZeroPipeline:
             return False
     
     def run_training(self, iteration: int) -> Optional[str]:
-        """모델 훈련"""
+        """모델 훈련 (AlphaZero 논문 방식: 모든 이전 데이터 누적)"""
         self.log(f"🎯 모델 훈련 시작 (Iteration {iteration})")
         
-        data_input = self.data_dir / f"iter_{iteration}"
+        # AlphaZero 논문 방식: 모든 이전 iteration의 데이터 누적
+        all_data_dirs = []
+        for i in range(1, iteration + 1):
+            iter_data_dir = self.data_dir / f"iter_{i}"
+            if iter_data_dir.exists():
+                data_files = list(iter_data_dir.glob("*.pt"))
+                if data_files:
+                    all_data_dirs.append(str(iter_data_dir))
+                    self.log(f"   📂 Iteration {i} 데이터 포함: {len(data_files)}개 파일")
+        
+        if not all_data_dirs:
+            self.log(f"❌ 훈련할 데이터가 없습니다!")
+            return None
+        
+        # 모든 데이터를 하나의 임시 디렉토리로 복사
+        temp_data_dir = self.data_dir / f"temp_combined_{iteration}"
+        temp_data_dir.mkdir(exist_ok=True)
+        
+        file_count = 0
+        for data_dir in all_data_dirs:
+            for file_path in Path(data_dir).glob("*.pt"):
+                new_name = f"iter_{iteration}_file_{file_count:04d}.pt"
+                shutil.copy2(file_path, temp_data_dir / new_name)
+                file_count += 1
+        
+        self.log(f"   📊 총 {file_count}개 파일을 훈련에 사용")
+        
         output_dir = self.data_dir / f"models_iter_{iteration}"
         output_dir.mkdir(exist_ok=True)
         
-        # 훈련 명령어 구성 (train.py는 고정된 "trained_model.pt" 이름 사용)
+        # 훈련 명령어 구성 (AlphaZero 논문 방식)
         cmd = [
             "uv", "run", "python", "scripts/train.py",
-            "--data", str(data_input),
+            "--data", str(temp_data_dir),
             "--epochs", str(self.config['training_epochs']),
             "--batch-size", str(self.config['training_batch_size']),
             "--lr", str(self.config['training_lr']),
@@ -238,10 +284,11 @@ class AlphaZeroPipeline:
         if self.config.get('mixed_precision', False):
             cmd.append("--mixed-precision")
         
-        # 기존 best 모델이 있으면 이어서 훈련
+        # 기존 best 모델이 있으면 이어서 훈련 (AlphaZero 논문 방식)
         best_model_path = self.model_manager.get_best_model_path()
         if best_model_path and self.config['continue_training']:
             cmd.extend(["--model", best_model_path])
+            self.log(f"   🔄 기존 모델로 이어서 훈련: {best_model_path}")
         
         try:
             self.log(f"   명령어: {' '.join(cmd)}")
@@ -269,6 +316,10 @@ class AlphaZeroPipeline:
                 if trained_model_path.exists():
                     shutil.move(str(trained_model_path), str(final_model_path))
                     self.log(f"✅ 모델 훈련 완료: {final_model_path}")
+                    
+                    # 임시 데이터 디렉토리 정리
+                    shutil.rmtree(temp_data_dir, ignore_errors=True)
+                    
                     return str(final_model_path)
                 else:
                     self.log(f"❌ 훈련된 모델을 찾을 수 없음: {trained_model_path}")

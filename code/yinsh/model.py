@@ -1,4 +1,4 @@
-# model.py - YINSH Neural Network Model (PyTorch)
+# model.py - YINSH Neural Network Model (PyTorch) - 간소화 버전
 
 import torch
 import torch.nn as nn
@@ -30,22 +30,22 @@ class ResidualBlock(nn.Module):
 
 
 class YinshNet(nn.Module):
-    """YINSH 게임용 신경망 (AlphaZero 논문 기반)"""
+    """YINSH 게임용 신경망 (AlphaZero 논문 기반) - 간소화 버전"""
 
     def __init__(
         self,
-        input_channels: int = 15,  # 15개 입력 채널
+        input_channels: int = 6,  # 6채널로 간소화
         board_size: int = 11,
         num_res_blocks: int = 20,  # AlphaZero 논문: 체스 20, 바둑 40
         num_filters: int = 256,  # AlphaZero 논문: 256
-        policy_output_dim: int = 4000,
+        policy_output_dim: int = 1848,  # 링 이동 액션만 고려하므로 크기 축소
         dropout_rate: float = 0.3,
     ):
         super(YinshNet, self).__init__()
 
         self.board_size = board_size
         self.policy_output_dim = policy_output_dim
-        self.device = torch.device('cpu')  # 기본값
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # 기본값
 
         # 초기 합성곱층
         self.conv1 = nn.Conv2d(
@@ -81,10 +81,10 @@ class YinshNet(nn.Module):
         Forward pass (AlphaZero 논문 기반)
 
         Args:
-            x: (batch_size, 15, 11, 11) - YINSH 게임 상태 텐서
+            x: (batch_size, 6, 11, 11) - YINSH 게임 상태 텐서 (간소화)
 
         Returns:
-            policy_logits: (batch_size, 4000) - 액션 확률 분포 (log softmax)
+            policy_logits: (batch_size, 1848) - 액션 확률 분포 (log softmax)
             value: (batch_size, 1) - 위치 평가값 (-1 ~ +1)
         """
         # 백본 네트워크
@@ -100,9 +100,10 @@ class YinshNet(nn.Module):
         # 가치 헤드 (AlphaZero 논문 기반)
         v = F.relu(self.value_bn(self.value_conv(x)))
         v = v.view(v.size(0), -1)  # flatten
+        # v = self.value_dropout(v)
         v = F.relu(self.value_fc1(v))
         v = self.value_dropout(v)
-        v = torch.tanh(self.value_fc2(v))
+        v = torch.tanh(self.value_fc2(v))  # -1 ~ +1 범위
 
         return p, v
 
@@ -111,11 +112,11 @@ class YinshNet(nn.Module):
         단일 상태에 대한 예측
 
         Args:
-            state_tensor: (13, 11, 11) 또는 (1, 13, 11, 11) - NumPy 배열 또는 PyTorch 텐서
+            state_tensor: (6, 11, 11) - 게임 상태 텐서
 
         Returns:
-            policy_probs: (4000,) - 액션 확률 분포
-            value: float - 위치 평가값
+            policy_probs: (1848,) - 액션 확률 분포
+            value: float - 상태 평가값
         """
         self.eval()
         with torch.no_grad():
@@ -141,31 +142,38 @@ class YinshNet(nn.Module):
 
 
 class YinshModelBuilder:
-    """YINSH 모델 생성 및 관리 클래스"""
+    """YINSH 모델 빌더"""
 
     def __init__(self):
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.default_config = {
+            'input_channels': 6,
+            'board_size': 11,
+            'num_res_blocks': 20,
+            'num_filters': 256,
+            'policy_output_dim': 1848,
+            'dropout_rate': 0.3
+        }
 
     def build_model(self) -> YinshNet:
         """새로운 YINSH 모델 생성 (AlphaZero 논문 기반)"""
         model = YinshNet(
-            input_channels=15,  # 15개 입력 채널
-            board_size=config.BOARD_SIZE,
-            num_res_blocks=20,  # AlphaZero 논문: 체스 20, 바둑 40
-            num_filters=256,  # AlphaZero 논문: 256
-            policy_output_dim=config.POLICY_OUTPUT_SIZE,
-            dropout_rate=0.3,  # AlphaZero 논문 기반 드롭아웃
+            input_channels=self.default_config['input_channels'],
+            board_size=self.default_config['board_size'],
+            num_res_blocks=self.default_config['num_res_blocks'],
+            num_filters=self.default_config['num_filters'],
+            policy_output_dim=self.default_config['policy_output_dim'],
+            dropout_rate=self.default_config['dropout_rate']
         )
-
         model = model.to(self.device)
         self.model = model
         return model
 
     def load_model(self, model_path: str) -> YinshNet:
-        """저장된 모델 로드 (구조 불일치 시 새로 초기화)"""
+        """저장된 모델 로드"""
         model = self.build_model()
-
+        
         try:
             loaded_data = torch.load(model_path, map_location=self.device)
             
@@ -208,55 +216,50 @@ class YinshModelBuilder:
         """모델 저장"""
         try:
             torch.save(model.state_dict(), model_path)
-            print(f"💾 Model saved to {model_path}")
+            print(f"✅ 모델 저장 완료: {model_path}")
         except Exception as e:
-            print(f"❌ Error saving model: {e}")
+            print(f"❌ 모델 저장 실패: {e}")
 
     def get_model_summary(self, model: YinshNet):
-        """모델 구조 요약"""
+        """모델 요약 정보"""
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-        print(
-            f"""
-🧠 YINSH Neural Network Summary:
-├── Input Shape: {config.INPUT_SHAPE}
-├── Policy Output: {config.POLICY_OUTPUT_SIZE}
-├── Board Size: {config.BOARD_SIZE}x{config.BOARD_SIZE}
-├── Residual Blocks: {config.AMOUNT_OF_RESIDUAL_BLOCKS}
-├── Filters: {config.CONVOLUTION_FILTERS}
-├── Total Parameters: {total_params:,}
-├── Trainable Parameters: {trainable_params:,}
-└── Device: {self.device}
-        """
-        )
+        
+        summary = {
+            'input_channels': model.conv1.in_channels,
+            'board_size': model.board_size,
+            'num_res_blocks': len(model.res_blocks),
+            'num_filters': model.conv1.out_channels,
+            'policy_output_dim': model.policy_output_dim,
+            'total_params': total_params,
+            'trainable_params': trainable_params,
+            'device': model.device
+        }
+        # 
+        #         print(
+        #             f"""
+        # 🧠 YINSH Neural Network Summary (Ring Place 제거):
+        # ├── Input Shape: (13, 11, 11)  # Ring Place 관련 채널 제거
+        # ├── Policy Output: {config.POLICY_OUTPUT_SIZE}
+        # ├── Board Size: {config.BOARD_SIZE}x{config.BOARD_SIZE}
+        # ├── Residual Blocks: {config.AMOUNT_OF_RESIDUAL_BLOCKS}
+        # ├── Filters: {config.CONVOLUTION_FILTERS}
+        # ├── Total Parameters: {total_params:,}
+        # ├── Trainable Parameters: {trainable_params:,}
+        # └── Device: {self.device}
+        #         """
+        #         )
+        return summary
 
 
 def create_yinsh_model() -> YinshNet:
-    """편의 함수: 새로운 YINSH 모델 생성 (개선된 아키텍처)"""
+    """YINSH 모델 생성 (편의 함수)"""
     builder = YinshModelBuilder()
     return builder.build_model()
 
 
 def load_yinsh_model(model_path: str) -> YinshNet:
-    """편의 함수: YINSH 모델 로드"""
+    """YINSH 모델 로드 (편의 함수)"""
     builder = YinshModelBuilder()
     return builder.load_model(model_path)
 
-
-# 입력 채널 설명
-CHANNEL_DESCRIPTIONS = {
-    0: "흰 링 위치 (1=흰 링, 0=그 외)",
-    1: "검은 링 위치 (1=검 링, 0=그 외)",
-    2: "흰 마커 위치 (1=흰 마커, 0=그 외)",
-    3: "검은 마커 위치 (1=검 마커, 0=그 외)",
-    4: "유효 칸 마스크 (1=플레이가능점, 0=불가점)",
-    5: "흰색 제거가능한 마커",
-    6: "검은색 제거가능한 마커",
-    7: "현재 단계 (GameTurnState)",
-    8: "현재 플레이어 (white=+1, black=-1)",
-    9: "흰 플레이어 회수 링 수 (0~3)",
-    10: "검 플레이어 회수 링 수 (0~3)",
-    11: "흰 마커 풀 잔여 개수 (정규화)",
-    12: "검은 마커 풀 잔여 개수 (정규화)",
-}

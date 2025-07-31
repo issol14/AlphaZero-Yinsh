@@ -29,8 +29,8 @@ from yinsh import YinshEnv, YinshAgent, Color, config, display_board, display_ac
 from yinsh.mapper import YinshActionMapper
 
 
-def run_single_game_parallel(game_config: Dict) -> Dict:
-    """병렬 실행용 단일 게임 실행 함수 (최적화된 버전)"""
+def run_single_game_parallel_optimized(game_config: Dict) -> Dict:
+    """GPU 최적화된 병렬 실행용 단일 게임 실행 함수"""
     try:
         game_id = game_config['game_id']
         model_path = game_config['model_path']
@@ -38,6 +38,8 @@ def run_single_game_parallel(game_config: Dict) -> Dict:
         mcts_sims = game_config['mcts_sims']
         use_mcts = game_config['use_mcts']
         show_board = game_config['show_board']
+        use_batch_mcts = game_config.get('use_batch_mcts', True)
+        batch_size = game_config.get('batch_size', 32)
         
         # 디바이스 설정 (GPU 메모리 최적화)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -47,9 +49,9 @@ def run_single_game_parallel(game_config: Dict) -> Dict:
             torch.cuda.empty_cache()
             torch.cuda.set_per_process_memory_fraction(0.8)  # GPU 메모리 사용량 제한
         
-        print(f"🎮 [Worker {os.getpid()}] Game {game_id + 1} starting...")
+        print(f"🎮 [Worker {os.getpid()}] Game {game_id + 1} starting (GPU optimized)...")
         
-        # 에이전트 생성 (메모리 효율적)
+        # 에이전트 생성 (GPU 최적화)
         agent1 = YinshAgent(
             model_path=model_path, 
             use_mcts=use_mcts, 
@@ -63,23 +65,23 @@ def run_single_game_parallel(game_config: Dict) -> Dict:
             device=device
         )
         
-        # Selfplay용 빠른 MCTS 설정
-        if use_mcts:
-            # Selfplay용으로 시뮬레이션 수 조정
-            fast_sims = min(mcts_sims, config.SELFPLAY_MCTS_SIMULATIONS)
-            agent1.mcts_agent.mcts.num_simulations = fast_sims
-            agent2.mcts_agent.mcts.num_simulations = fast_sims
+        # GPU 배치 MCTS 설정
+        if use_mcts and use_batch_mcts and hasattr(agent1, 'mcts_agent') and agent1.mcts_agent:
+            # 배치 MCTS 설정
+            agent1.mcts_agent.mcts.num_simulations = mcts_sims
+            agent2.mcts_agent.mcts.num_simulations = mcts_sims
             
-            # 병렬 MCTS 스레드 수 설정
-            if game_config.get('use_parallel_mcts', False):
-                num_threads = game_config.get('mcts_threads', 4)
-                agent1.mcts_agent.mcts.num_threads = num_threads
-                agent2.mcts_agent.mcts.num_threads = num_threads
+            # 배치 크기 설정
+            if hasattr(agent1.mcts_agent.mcts, 'batch_size'):
+                agent1.mcts_agent.mcts.batch_size = batch_size
+                agent2.mcts_agent.mcts.batch_size = batch_size
         
         game_start_time = time.time()
         
-        # 게임 실행 (최적화된 버전)
-        game_history, winner, turns = play_game_optimized(agent1, agent2, game_id=game_id, show_board=show_board)
+        # 게임 실행 (GPU 최적화된 버전)
+        game_history, winner, turns = play_game_gpu_optimized(
+            agent1, agent2, game_id=game_id, show_board=show_board
+        )
         
         # 훈련 데이터 생성
         training_data = generate_training_data(game_history, winner, game_id=game_id)
@@ -100,10 +102,11 @@ def run_single_game_parallel(game_config: Dict) -> Dict:
             'positions': len(training_data),
             'game_time': game_time,
             'save_success': save_result is not None,
-            'process_id': os.getpid()
+            'process_id': os.getpid(),
+            'gpu_optimized': True
         }
         
-        print(f"✅ [Worker {os.getpid()}] Game {game_id + 1} completed in {game_time:.1f}s")
+        print(f"✅ [Worker {os.getpid()}] Game {game_id + 1} completed in {game_time:.1f}s (GPU optimized)")
         return result
         
     except Exception as e:
@@ -129,7 +132,9 @@ def run_parallel_games(args):
             'use_mcts': not args.no_mcts,
             'show_board': args.show_board,
             'use_parallel_mcts': args.parallel_mcts,
-            'mcts_threads': args.mcts_threads
+            'mcts_threads': args.mcts_threads,
+            'use_batch_mcts': args.gpu_batch,
+            'batch_size': args.batch_size
         }
         for i in range(args.games)
     ]
@@ -147,7 +152,7 @@ def run_parallel_games(args):
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         # 모든 게임 제출
         future_to_config = {
-            executor.submit(run_single_game_parallel, config): config 
+            executor.submit(run_single_game_parallel_optimized, config): config 
             for config in game_configs
         }
         
@@ -321,27 +326,91 @@ def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=Fa
     
     while not env.is_game_over() and turn_count < max_turns:
         current_player = env.current_player
-        agent = agent1 if current_player == Color.BLACK else agent2
+        agent = agent1 if current_player == Color.WHITE else agent2
         
         print(f"   📝 Turn {turn_count + 1}: {current_player.name} 플레이어")
         
         # 현재 상태 저장
-        state = env.get_state()
+        state = env.get_state_tensor()
         print(f"      상태 형태: {state.shape if hasattr(state, 'shape') else type(state)}")
         
         # 액션 선택
-        action = agent.select_action(env)
+        action, action_info = agent.select_action(env)
+        print(f"      선택된 액션: {action}")
+        
+        # 액션 정보 수집 (이미 select_action에서 반환됨)
+        if action_info and "method" in action_info:
+            print(f"       방법: {action_info['method']}")
+            if "mcts_stats" in action_info:
+                stats = action_info["mcts_stats"]
+                print(f"       MCTS 통계 수집: {len(stats)}개 항목")
+        
+        # 게임 히스토리에 추가
+        move_data = {
+            "state": state,
+            "action": action,
+            "player": current_player,
+            "action_info": action_info
+        }
+        game_history.append(move_data)
+        print(f"      ✅ Turn {turn_count + 1} 히스토리 추가 완료")
+        
+        # 액션 실행
+        env.step(action)
+        turn_count += 1
+        
+        if show_board:
+            display_compact_board(env)
+    
+    winner = env.get_winner()
+    print(f"   🏁 게임 종료: {winner.name if winner else 'DRAW'}")
+    print(f"   📊 총 턴 수: {turn_count}")
+    print(f"   📈 게임 히스토리 길이: {len(game_history)}")
+    
+    return game_history, winner, turn_count
+
+
+def play_game_gpu_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
+    """GPU 최적화된 게임 실행"""
+    print(f"🎮 Game {game_id + 1} 시작 (GPU 최적화 버전)")
+    
+    env = YinshEnv()
+    game_history = []
+    turn_count = 0
+    
+    print(f"   🎯 최대 턴 수: {max_turns}")
+    print(f"   🔧 GPU 최적화: 활성화")
+    
+    while not env.is_game_over() and turn_count < max_turns:
+        current_player = env.current_player
+        agent = agent1 if current_player == Color.WHITE else agent2
+        
+        print(f"   📝 Turn {turn_count + 1}: {current_player.name} 플레이어")
+        
+        # 현재 상태 저장
+        state = env.get_state_tensor()
+        print(f"      상태 형태: {state.shape if hasattr(state, 'shape') else type(state)}")
+        
+        # GPU 최적화된 액션 선택
+        if hasattr(agent, 'mcts_agent') and agent.mcts_agent and hasattr(agent.mcts_agent.mcts, 'search_parallel'):
+            # 배치 MCTS 사용
+            action, action_info = agent.mcts_agent.select_action_parallel(env)
+            print(f"      🚀 GPU 배치 MCTS 사용")
+        else:
+            # 일반 MCTS 사용
+            action, action_info = agent.select_action(env)
+            print(f"      🤖 일반 MCTS 사용")
+        
         print(f"      선택된 액션: {action}")
         
         # 액션 정보 수집
-        action_info = {}
-        if hasattr(agent, 'mcts_agent') and agent.mcts_agent is not None:
-            # MCTS 통계 수집
-            mcts_stats = agent.mcts_agent.get_last_stats()
-            if mcts_stats:
-                action_info["method"] = "mcts"  # <-- 이 줄을 추가하세요!
-                action_info["mcts_stats"] = mcts_stats
-                print(f"       MCTS 통계 수집: {len(mcts_stats)}개 항목")
+        if action_info and "method" in action_info:
+            print(f"       방법: {action_info['method']}")
+            if "mcts_stats" in action_info:
+                stats = action_info["mcts_stats"]
+                print(f"       MCTS 통계 수집: {len(stats)}개 항목")
+                if "batch_evaluations" in stats:
+                    print(f"       배치 평가 횟수: {stats['batch_evaluations']}")
         
         # 게임 히스토리에 추가
         move_data = {
@@ -369,7 +438,7 @@ def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=Fa
 
 
 def extract_mcts_policy_distribution(action_info, action_mapper, executed_action):
-    """MCTS 통계에서 4000차원 정책 분포 추출 (개선된 버전)"""
+    """MCTS 통계에서 정책 분포 추출 (개선된 버전)"""
     policy = np.zeros(config.POLICY_OUTPUT_SIZE, dtype=np.float32)
     
     # MCTS 사용한 경우
@@ -380,14 +449,14 @@ def extract_mcts_policy_distribution(action_info, action_mapper, executed_action
         visit_counts = mcts_stats.get("visit_counts", {})
         
         if visit_counts:
-            # 액션별 방문 횟수를 4000차원 벡터로 변환
             total_visits = sum(visit_counts.values())
             
             if total_visits > 0:
-                # visit_counts의 키들을 처리
+                # 모든 액션에 대해 방문 횟수 기반 확률 할당
                 for action_str, visits in visit_counts.items():
                     try:
-                        # 실행된 액션과 일치하는 경우 우선 처리
+                        # 문자열을 액션 객체로 변환 시도
+                        # 간단한 방법: 실행된 액션과 문자열 비교
                         if action_str == str(executed_action):
                             action_index = action_mapper.get_action_index(executed_action)
                             if action_index is not None and action_index < config.POLICY_OUTPUT_SIZE:
@@ -395,19 +464,24 @@ def extract_mcts_policy_distribution(action_info, action_mapper, executed_action
                     except Exception:
                         continue
                 
-                # 다른 액션들도 처리 (문자열 파싱은 복잡하므로 스킵)
-                # 대신 실행된 액션의 확률을 높게 설정
+                # 실행된 액션이 방문 횟수에 없는 경우 처리
                 if policy.sum() == 0:
-                    # 실행된 액션에 모든 확률 할당
                     action_index = action_mapper.get_action_index(executed_action)
                     if action_index is not None:
                         policy[action_index] = 1.0
-            
-            # 정책 벡터 정규화 (안전장치)
-            if policy.sum() > 0:
-                policy = policy / policy.sum()
+                
+                # 정책 벡터 정규화
+                if policy.sum() > 0:
+                    policy = policy / policy.sum()
+                else:
+                    # 기본값: 실행된 액션에 확률 1.0 할당
+                    action_index = action_mapper.get_action_index(executed_action)
+                    if action_index is not None:
+                        policy[action_index] = 1.0
+                    else:
+                        policy[0] = 1.0
             else:
-                # 실행된 액션에 확률 1.0 할당
+                # 방문 횟수가 0인 경우 실행된 액션에 확률 1.0 할당
                 action_index = action_mapper.get_action_index(executed_action)
                 if action_index is not None:
                     policy[action_index] = 1.0
@@ -421,9 +495,9 @@ def extract_mcts_policy_distribution(action_info, action_mapper, executed_action
             else:
                 policy[0] = 1.0
     
-    # Direct neural network 사용한 경우는 원핫 처리
+    # Direct neural network 사용한 경우는 None 반환 (원핫 처리)
     else:
-        return None  # 원핫 처리는 generate_training_data에서
+        return None
     
     return policy
 
@@ -453,7 +527,7 @@ def generate_training_data(game_history, winner, game_id=0):
             print(f"      플레이어: {player}")
             print(f"      액션 정보 키: {list(action_info.keys()) if isinstance(action_info, dict) else 'N/A'}")
 
-            # MCTS 정책 분포 추출 시도 (환경 복원 없이)
+            # MCTS 정책 분포 추출 시도
             policy = extract_mcts_policy_distribution(action_info, action_mapper, action)
             
             print(f"      정책 추출 결과: {'성공' if policy is not None else '실패'}")
@@ -462,7 +536,7 @@ def generate_training_data(game_history, winner, game_id=0):
             if policy is None:
                 policy = np.zeros(config.POLICY_OUTPUT_SIZE, dtype=np.float32)
                 try:
-                    action_index = action_mapper.get_action_index(action)  # 수정된 메서드명
+                    action_index = action_mapper.get_action_index(action)
                     if action_index is not None:
                         policy[action_index] = 1.0
                         direct_policy_count += 1
@@ -478,6 +552,15 @@ def generate_training_data(game_history, winner, game_id=0):
             else:
                 mcts_policy_count += 1
                 print(f"      ✅ MCTS 정책 생성: {policy.shape}")
+                
+                # 정책 벡터 검증
+                if policy.sum() == 0:
+                    print(f"      ⚠️ Turn {i+1}: Policy vector is all zeros, using fallback")
+                    action_index = action_mapper.get_action_index(action)
+                    if action_index is not None:
+                        policy[action_index] = 1.0
+                    else:
+                        policy[0] = 1.0
 
             # 가치 계산
             if winner is None:
@@ -586,6 +669,12 @@ def main():
     parser.add_argument("--ultra-fast", action="store_true",
                        help="초고속 selfplay 모드 (매우 적은 시뮬레이션, 로깅 없음)")
     
+    # GPU 최적화 옵션 추가
+    parser.add_argument("--gpu-batch", action="store_true",
+                       help="GPU 배치 MCTS 사용 (GPU 메모리 최적화)")
+    parser.add_argument("--batch-size", type=int, default=32,
+                       help="GPU 배치 크기 (기본: 32)")
+    
     # 병렬 MCTS 옵션 추가
     parser.add_argument("--parallel-mcts", action="store_true",
                        help="병렬 MCTS 사용 (CPU 멀티스레딩)")
@@ -604,6 +693,10 @@ def main():
         args.show_board = False  # 보드 표시 비활성화
         args.workers = min(args.workers * 2, 12)  # 워커 수 증가
         print("🚀 초고속 모드 활성화")
+    
+    # GPU 배치 모드 설정
+    if args.gpu_batch:
+        print(f"🚀 GPU 배치 모드 활성화 (배치 크기: {args.batch_size})")
 
     print("🎮 Starting Enhanced YINSH AlphaZero Self-Play...")
     print(f"📋 설정:")

@@ -10,7 +10,7 @@ from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 from datetime import datetime
 
-from .env import YinshEnv, Color, YinshAction, GamePhase
+from .env import YinshEnv, Color, YinshAction
 from .agent import YinshAgent, create_agent
 from .mapper import YinshActionMapper
 from . import config
@@ -62,30 +62,29 @@ class YinshGame:
             return 0.0  # 무승부
 
     @time_function
-    def play_one_game(self, stochastic: bool = True, max_moves: int = None) -> float:
+    def play_one_game(self, stochastic: bool = True) -> float:
         """
         한 게임을 시작부터 끝까지 플레이
 
         Args:
             stochastic: 확률적 액션 선택 여부
-            max_moves: 최대 이동 수
 
         Returns:
-            게임 결과 (-1, 0, 1)
+            게임 결과 (-1.0, 0.0, 1.0)
         """
         self.reset()
         self.game_start_time = time.time()
 
-        if max_moves is None:
-            max_moves = config.MAX_GAME_MOVES
+        # if max_moves is None:
+        #     max_moves = config.MAX_GAME_MOVES
 
-        print(f"🎯 Starting new YINSH game (max moves: {max_moves})")
+        print(f"🎯 Starting new YINSH game")
 
         # 게임 메모리 초기화
         self.memory.append([])
 
         # 게임 진행
-        while not self.env.is_game_over() and self.moves_played < max_moves:
+        while not self.env.is_game_over():
             # 현재 플레이어 결정
             current_player = self.env.current_player
             current_agent = (
@@ -120,7 +119,7 @@ class YinshGame:
                 self.moves_played += 1
 
                 if self.moves_played % 20 == 0:
-                    print(f"├── Move {self.moves_played}: Phase {self.env.phase}, Player {self.env.current_player}")
+                    print(f"├── Move {self.moves_played}: , Player {self.env.current_player}")
 
             except Exception as e:
                 print(f"❌ Error in move {self.moves_played}: {e}")
@@ -137,7 +136,7 @@ class YinshGame:
             "duration": game_duration,
             "winner": winner.name if winner else "draw",
             "winner_value": winner_value,
-            "final_state": f"Phase: {self.env.phase}, Removed rings: W{self.env.rings_removed[Color.WHITE]} B{self.env.rings_removed[Color.BLACK]}",
+            "final_state": f"Rings: W{len(self.env.ring_positions[Color.WHITE])} B{len(self.env.ring_positions[Color.BLACK])}",
             "white_agent": self.white_agent.__class__.__name__,
             "black_agent": self.black_agent.__class__.__name__,
         }
@@ -237,7 +236,7 @@ class YinshGame:
     def get_game_summary(self) -> Dict:
         """게임 요약 정보 반환"""
         return {
-            "moves_played": self.moves_played,
+            "turns": self.moves_played,
             "winner": self.game_info.get("winner", "unknown"),
             "duration": self.game_info.get("duration", 0.0),
             "final_state": self.game_info.get("final_state", "unknown"),
@@ -247,9 +246,8 @@ class YinshGame:
     def print_board(self):
         """현재 보드 상태 출력"""
         print("Current board state:")
-        print(f"Phase: {self.env.phase}")
         print(f"Current Player: {self.env.current_player}")
-        print(f"Removed Rings - White: {self.env.rings_removed[Color.WHITE]}, Black: {self.env.rings_removed[Color.BLACK]}")
+        print(f"Rings - White: {len(self.env.ring_positions[Color.WHITE])}, Black: {len(self.env.ring_positions[Color.BLACK])}")
 
 
 def create_yinsh_game(

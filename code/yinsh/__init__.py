@@ -16,7 +16,7 @@ Modules:
 - config: Configuration constants
 """
 
-from .env import YinshEnv, YinshAction, Color, GamePhase
+from .env import YinshEnv, YinshAction, Color
 from .model import YinshNet as YinshModel
 from .agent import YinshAgent
 from .mcts import MCTS as YinshMCTS
@@ -35,7 +35,6 @@ __all__ = [
     "YinshEnv",
     "YinshAction",
     "Color",
-    "GamePhase",
     # 모델
     "YinshModel",
     # 에이전트

@@ -7,7 +7,7 @@ import math
 import time
 from collections import defaultdict
 
-from .env import YinshEnv, YinshAction, Color, GamePhase
+from .env import YinshEnv, YinshAction, Color
 from .node_optimized import YinshNode
 from .mapper import YinshActionMapper
 from . import config
@@ -91,8 +91,109 @@ class OptimizedMCTS:
             "search_time": search_time,
             "simulations_per_second": self.num_simulations / search_time if search_time > 0 else 0,
         })
+        
+        # 마지막 통계 저장
+        self._last_stats = stats
 
         return best_action, stats
+
+    def search_parallel(
+        self, 
+        root_env: YinshEnv, 
+        temperature: float = 1.0,
+        add_noise: bool = False,
+        batch_size: int = 32
+    ) -> Tuple[YinshAction, Dict]:
+        """
+        병렬 MCTS 검색 (GPU 배치 추론 최적화)
+        
+        Args:
+            root_env: 루트 게임 환경
+            temperature: 액션 선택 온도
+            add_noise: Dirichlet 노이즈 추가 여부
+            batch_size: GPU 배치 크기
+            
+        Returns:
+            best_action: 최적 액션
+            stats: 검색 통계
+        """
+        # 루트 노드 생성 및 확장
+        root = YinshNode(root_env.copy(), None, None)
+        
+        # 루트 노드 신경망 평가 및 확장
+        self._expand_and_evaluate(root)
+        
+        # Dirichlet 노이즈 추가 (셀프플레이용)
+        if add_noise:
+            self._add_dirichlet_noise(root)
+
+        # 배치 추론을 위한 리프 노드 수집
+        leaf_nodes = []
+        start_time = time.time()
+        
+        for _ in range(self.num_simulations):
+            # 1. Selection: UCB로 리프 노드까지 경로 선택
+            path = self._select_path(root)
+            leaf = path[-1]
+            
+            # 2. 리프 노드가 확장되지 않은 경우 수집
+            if not leaf.children and not leaf.env.is_game_over():
+                leaf_nodes.append(leaf)
+                
+                # 배치 크기에 도달하면 배치 추론 실행
+                if len(leaf_nodes) >= batch_size:
+                    self._evaluate_batch_and_expand(leaf_nodes)
+                    leaf_nodes = []
+            
+            # 3. Backup: 경로를 따라 값 역전파
+            if leaf.children:
+                # 이미 확장된 노드의 경우 랜덤 자식 선택
+                action = np.random.choice(list(leaf.children.keys()))
+                child = leaf.children[action]
+                value = child.cached_value if hasattr(child, 'cached_value') else 0.0
+            else:
+                # 터미널 노드인 경우
+                value = self._get_terminal_value(leaf.env)
+            
+            self._backup_path(path, value)
+
+        # 남은 리프 노드들 처리
+        if leaf_nodes:
+            self._evaluate_batch_and_expand(leaf_nodes)
+
+        # 최종 액션 선택
+        best_action, stats = self._select_final_action(root, temperature)
+
+        # 통계 업데이트
+        search_time = time.time() - start_time
+        stats.update({
+            "nodes_expanded": self.nodes_expanded,
+            "cache_hits": self.cache_hits,
+            "search_time": search_time,
+            "simulations_per_second": self.num_simulations / search_time if search_time > 0 else 0,
+            "batch_evaluations": len(leaf_nodes) // batch_size + 1,
+        })
+        
+        # 마지막 통계 저장
+        self._last_stats = stats
+
+        return best_action, stats
+    
+    def _evaluate_batch_and_expand(self, leaf_nodes: List[YinshNode]) -> None:
+        """배치로 리프 노드들을 평가하고 확장"""
+        if not leaf_nodes:
+            return
+        
+        # 배치 추론
+        envs = [node.env for node in leaf_nodes]
+        policies, values = self._evaluate_batch_with_neural_network(envs)
+        
+        # 각 노드 확장
+        for i, node in enumerate(leaf_nodes):
+            if i < len(policies):
+                self._expand_node(node, policies[i])
+                node.cached_value = values[i] if i < len(values) else 0.0
+                self.nodes_expanded += 1
 
     def _select_path(self, root: YinshNode) -> List[YinshNode]:
         """
@@ -301,6 +402,51 @@ class OptimizedMCTS:
 
         return selected_action, stats
 
+    def _get_terminal_value(self, env: YinshEnv) -> float:
+        """
+        터미널 노드의 가치 계산
+        
+        Args:
+            env: 게임 환경
+            
+        Returns:
+            value: 터미널 노드의 가치 (-1, 0, 1)
+        """
+        if not env.is_game_over():
+            return 0.0
+            
+        winner = env.get_winner()
+        if winner is None:
+            return 0.0  # 무승부
+        elif winner == env.current_player:
+            return 1.0  # 현재 플레이어 승리
+        else:
+            return -1.0  # 상대 플레이어 승리
+
+    def _evaluate_batch_with_neural_network(
+        self, envs: List[YinshEnv]
+    ) -> Tuple[List[np.ndarray], List[float]]:
+        """배치로 여러 환경을 동시에 신경망으로 평가 (GPU 최적화)"""
+        if not envs:
+            return [], []
+        
+        # 배치 텐서 생성
+        batch_tensors = []
+        for env in envs:
+            state_tensor = env.get_state_tensor()
+            batch_tensors.append(state_tensor)
+        
+        # 배치로 변환
+        batch_tensor = torch.stack([torch.from_numpy(t) for t in batch_tensors]).to(self.neural_network.device)
+        
+        # GPU에서 배치 추론
+        with torch.no_grad():
+            policies, values = self.neural_network(batch_tensor)
+            policies = policies.cpu().numpy()
+            values = values.cpu().numpy().flatten()
+        
+        return list(policies), list(values)
+    
     def _evaluate_with_neural_network(
         self, env: YinshEnv
     ) -> Tuple[np.ndarray, float]:
@@ -359,6 +505,12 @@ class OptimizedMCTS:
             "hit_rate": hit_rate,
             "total_requests": total_requests
         }
+    
+    def get_last_stats(self) -> Dict:
+        """마지막 MCTS 검색의 통계 반환"""
+        if not hasattr(self, '_last_stats'):
+            return {}
+        return self._last_stats
 
 
 class OptimizedMCTSAgent:
@@ -410,6 +562,38 @@ class OptimizedMCTSAgent:
             "cache_stats": self.mcts.get_cache_stats(),
             "agent_name": self.name,
             "games_played": self.games_played,
+        }
+
+        return action, mcts_info
+    
+    def select_action_parallel(
+        self, 
+        env: YinshEnv, 
+        temperature: float = 1.0,
+        add_noise: bool = False,
+        batch_size: int = 32
+    ) -> Tuple[YinshAction, Dict]:
+        """
+        GPU 배치 최적화된 MCTS로 액션 선택
+        
+        Args:
+            env: 게임 환경
+            temperature: 선택 온도
+            add_noise: Dirichlet 노이즈 추가 (셀프플레이용)
+            batch_size: GPU 배치 크기
+            
+        Returns:
+            action: 선택된 액션
+            mcts_info: MCTS 정보
+        """
+        action, stats = self.mcts.search_parallel(env, temperature, add_noise, batch_size)
+
+        mcts_info = {
+            "mcts_stats": stats,
+            "cache_stats": self.mcts.get_cache_stats(),
+            "agent_name": f"{self.name} (GPU Batch)",
+            "games_played": self.games_played,
+            "batch_size": batch_size,
         }
 
         return action, mcts_info

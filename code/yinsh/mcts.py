@@ -6,7 +6,7 @@ from typing import Dict, List, Tuple, Optional
 import math
 import time
 
-from .env import YinshEnv, YinshAction, Color, GamePhase
+from .env import YinshEnv, YinshAction, Color
 from .node import YinshNode
 from .mapper import YinshActionMapper
 from . import config
@@ -50,6 +50,10 @@ class MCTS:
             best_action: 최적 액션
             stats: 검색 통계
         """
+        # 게임이 이미 종료된 경우
+        if env.is_game_over():
+            return None, {"error": "Game is already over"}
+        
         # 루트 노드 생성
         root = YinshNode(env.copy(), None, None)
 
@@ -71,23 +75,43 @@ class MCTS:
                 # 자식 노드 중 하나 선택
                 action = np.random.choice(list(current_node.children.keys()))
                 child = current_node.children[action]
-                value = self._evaluate_with_neural_network(
-                    child.env.get_state_tensor()
-                )[1]
-            else:
-                # 터미널 노드인 경우
-                if current_env.is_game_over():
-                    winner = current_env.get_winner()
+                # 게임이 종료된 경우 터미널 값 사용
+                if child.env.is_game_over():
+                    winner = child.env.get_winner()
                     if winner == Color.WHITE:
-                        value = 1.0 if current_env.current_player == Color.WHITE else -1.0
+                        value = 1.0 if child.env.current_player == Color.WHITE else -1.0
                     elif winner == Color.BLACK:
-                        value = 1.0 if current_env.current_player == Color.BLACK else -1.0
+                        value = 1.0 if child.env.current_player == Color.BLACK else -1.0
                     else:
                         value = 0.0  # 무승부
                 else:
-                    value = self._evaluate_with_neural_network(
-                        current_env.get_state_tensor()
-                    )[1]
+                    # 신경망으로 평가
+                    try:
+                        value = self._evaluate_with_neural_network(
+                            child.env.get_state_tensor()
+                        )[1]
+                    except Exception as e:
+                        print(f"Warning: Neural network evaluation failed: {e}")
+                        value = 0.0  # 기본값
+            else:
+                # 터미널 노드인 경우
+                if current_node.env.is_game_over():
+                    winner = current_node.env.get_winner()
+                    if winner == Color.WHITE:
+                        value = 1.0 if current_node.env.current_player == Color.WHITE else -1.0
+                    elif winner == Color.BLACK:
+                        value = 1.0 if current_node.env.current_player == Color.BLACK else -1.0
+                    else:
+                        value = 0.0  # 무승부
+                else:
+                    # 게임이 진행 중인 경우 신경망으로 평가
+                    try:
+                        value = self._evaluate_with_neural_network(
+                            current_node.env.get_state_tensor()
+                        )[1]
+                    except Exception as e:
+                        print(f"Warning: Neural network evaluation failed: {e}")
+                        value = 0.0  # 기본값
 
             # Backup: 루트까지 역전파
             self._backup(current_node, value)
@@ -97,6 +121,7 @@ class MCTS:
 
         # 통계 업데이트
         search_time = time.time() - start_time
+        print(f"search_time: {search_time}")
         stats.update(
             {
                 "nodes_expanded": self.nodes_expanded,
@@ -266,7 +291,11 @@ class MCTS:
             stats: 선택 통계
         """
         if not root.children:
-            raise ValueError("Root node has no children!")
+            # 게임이 종료된 경우
+            if root.env.is_game_over():
+                return None, {"error": "Game is over, no actions available"}
+            else:
+                raise ValueError("Root node has no children!")
 
         # 방문 횟수 기반 확률 분포 계산
         actions = list(root.children.keys())

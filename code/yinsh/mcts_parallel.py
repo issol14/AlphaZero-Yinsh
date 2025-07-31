@@ -9,7 +9,7 @@ from typing import Dict, List, Tuple, Optional
 import math
 from collections import defaultdict
 
-from .env import YinshEnv, YinshAction, Color, GamePhase
+from .env import YinshEnv, YinshAction, Color
 from .node_optimized import YinshNode
 from .mapper import YinshActionMapper
 from . import config
@@ -349,7 +349,7 @@ class ParallelMCTSAgent:
             neural_network=neural_network,
             c_puct=mcts_config.get("c_puct", config.CPUCT),
             num_simulations=mcts_config.get("num_simulations", config.MCTS_SIMULATIONS),
-            num_threads=mcts_config.get("num_threads", 4),
+            num_threads=mcts_config.get("num_threads", 6),
             batch_size=mcts_config.get("batch_size", 32)
         )
     

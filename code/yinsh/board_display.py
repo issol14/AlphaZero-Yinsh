@@ -9,7 +9,7 @@ YinshEnv의 보드 상태를 시각적으로 출력하는 유틸리티 함수들
 """
 
 from typing import Optional, List, Tuple
-from .env import YinshEnv, Color, GamePhase
+from .env import YinshEnv, Color
 
 
 def display_board(env: YinshEnv, title: Optional[str] = None, 
@@ -33,14 +33,13 @@ def display_board(env: YinshEnv, title: Optional[str] = None,
         print(f"{'='*60}")
     
     # 게임 상태 정보 출력
-    print(f"🎮 게임 단계: {env.phase.name}")
     print(f"🎯 현재 플레이어: {env.current_player.name}")
-    print(f"⚪ 흰색 링: 배치됨 {env.rings_placed[Color.WHITE]}/5, 제거됨 {env.rings_removed[Color.WHITE]}/3")
-    print(f"⚫ 검은색 링: 배치됨 {env.rings_placed[Color.BLACK]}/5, 제거됨 {env.rings_removed[Color.BLACK]}/3")
+    print(f"⚪ 흰색 링: {len(env.ring_positions[Color.WHITE])}개")
+    print(f"⚫ 검은색 링: {len(env.ring_positions[Color.BLACK])}개")
     print(f"🎪 마커 풀: {env.markers_in_pool}개 남음")
-    
-    if env.phase == GamePhase.LINE_REMOVAL and env.pending_line_removals:
-        print(f"🔴 라인 제거 대기 중: {len(env.pending_line_removals[0])}개 연속 마커")
+    print(f"🎮 게임 상태: {'종료' if env.done else '진행 중'}")
+    if env.done and env.winner:
+        print(f"🏆 승자: {env.winner.name}")
     
     print()
     
@@ -56,22 +55,28 @@ def display_board(env: YinshEnv, title: Optional[str] = None,
     
     # 보드 출력
     if show_coordinates:
-        # 상단 좌표 (Y축)
-        print("    ", end="")
+        # 상단 hex r 좌표 안내
+        print("     ", end="")
         for y in range(env.board_size):
-            print(f"{y:2}", end="")
-        print()
+            hex_pos = env.array_to_hex_coords((5, y))  # 중간 행 사용
+            print(f"{hex_pos[1]:2}", end="")
+        print(" (r)")
     
     for x in range(env.board_size):
         if show_coordinates:
-            print(f"{x:2}: ", end="")  # 좌측 좌표 (X축)
+            hex_pos = env.array_to_hex_coords((x, 5))  # 중간 열 사용
+            print(f"{hex_pos[0]:2}: ", end="")  # q 좌표
         else:
-            print("  ", end="")
+            print("    ", end="")
         
         for y in range(env.board_size):
             char = board_display[x][y]
             print(f"{char} ", end="")
         print()
+    
+    if show_coordinates:
+        print("    (q축은 좌측, r축은 상단)")
+        print("    실제 좌표는 각 위치마다 다릅니다. help 명령어로 예시 확인하세요.")
     
     print()
     
@@ -82,31 +87,34 @@ def display_board(env: YinshEnv, title: Optional[str] = None,
     print("  . = 빈 공간    - = 무효 위치")
 
 
-def get_position_char(env: YinshEnv, pos: Tuple[int, int]) -> str:
+def get_position_char(env: YinshEnv, array_pos: Tuple[int, int]) -> str:
     """
     특정 위치의 표시 문자를 반환
     
     Args:
         env: YinshEnv 인스턴스
-        pos: 보드 위치 (x, y)
+        array_pos: 보드 위치 (x, y) - array 좌표계
         
     Returns:
         해당 위치를 나타내는 문자
     """
+    # array 좌표를 hex 좌표로 변환
+    hex_pos = env.array_to_hex_coords(array_pos)
+    
     # 1. 유효하지 않은 위치
-    if not env.is_valid_position(pos):
+    if not env.is_valid_position(hex_pos):
         return '-'
     
     # 2. 링 확인 (링이 마커보다 우선)
-    if pos in env.ring_positions[Color.WHITE]:
+    if hex_pos in env.ring_positions[Color.WHITE]:
         return 'r'
-    elif pos in env.ring_positions[Color.BLACK]:
+    elif hex_pos in env.ring_positions[Color.BLACK]:
         return 'R'
     
     # 3. 마커 확인
-    elif pos in env.marker_positions[Color.WHITE]:
+    elif hex_pos in env.marker_positions[Color.WHITE]:
         return 'm'
-    elif pos in env.marker_positions[Color.BLACK]:
+    elif hex_pos in env.marker_positions[Color.BLACK]:
         return 'M'
     
     # 4. 빈 공간
@@ -117,8 +125,6 @@ def get_position_char(env: YinshEnv, pos: Tuple[int, int]) -> str:
 def display_game_summary(env: YinshEnv) -> None:
     """게임 요약 정보 출력"""
     print(f"\n📊 게임 요약:")
-    print(f"   턴 수: {env.move_count}")
-    print(f"   게임 단계: {env.phase.name}")
     
     if env.is_game_over():
         winner = env.get_winner()
@@ -131,7 +137,7 @@ def display_game_summary(env: YinshEnv) -> None:
     for color in [Color.WHITE, Color.BLACK]:
         symbol = "⚪" if color == Color.WHITE else "⚫"
         print(f"   {symbol} {color.name}:")
-        print(f"      링: {len(env.ring_positions[color])}개 (제거됨 {env.rings_removed[color]}개)")
+        print(f"      링: {len(env.ring_positions[color])}개")
         print(f"      마커: {len(env.marker_positions[color])}개")
 
 
@@ -187,9 +193,11 @@ def display_compact_board(env: YinshEnv) -> str:
     white_markers = len(env.marker_positions[Color.WHITE])
     black_markers = len(env.marker_positions[Color.BLACK])
     
-    return (f"[{env.phase.name[:4]} {env.current_player.name[0]} | "
-            f"R:{white_rings}/{black_rings} M:{white_markers}/{black_markers} "
-            f"Removed:{env.rings_removed[Color.WHITE]}/{env.rings_removed[Color.BLACK]}]")
+    # 게임 상태 표시 (phase 대신 done 상태 사용)
+    game_status = "DONE" if env.done else "PLAY"
+    
+    return (f"[{game_status} {env.current_player.name[0]} | "
+            f"R:{white_rings}/{black_rings} M:{white_markers}/{black_markers}]")
 
 
 def save_board_to_text(env: YinshEnv, filename: str, title: Optional[str] = None) -> None:
