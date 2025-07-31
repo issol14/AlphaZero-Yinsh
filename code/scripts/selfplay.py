@@ -78,9 +78,9 @@ def run_single_game_parallel_optimized(game_config: Dict) -> Dict:
         
         game_start_time = time.time()
         
-        # 게임 실행 (GPU 최적화된 버전)
+        # 게임 실행 (GPU 최적화된 버전, 턴 수 무제한)
         game_history, winner, turns = play_game_gpu_optimized(
-            agent1, agent2, game_id=game_id, show_board=show_board
+            agent1, agent2, max_turns=None, game_id=game_id, show_board=show_board
         )
         
         # 훈련 데이터 생성
@@ -209,7 +209,7 @@ def run_parallel_games(args):
     print(f"└── 워커 수: {args.workers}")
 
 
-def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
+def play_game(agent1, agent2, max_turns=None, game_id=0, show_board=False):
     """두 에이전트 간의 게임 진행 - MCTS 정책 정보 포함"""
     print(f"\n🎮 Starting Game {game_id + 1}...")
     
@@ -222,7 +222,7 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
     if show_board:
         display_board(env, f"Game {game_id + 1} - 초기 상태")
 
-    while not env.is_game_over() and turn_count < max_turns:
+    while not env.is_game_over() and (max_turns is None or turn_count < max_turns):
         turn_start_time = time.time()
         current_player = agent1 if env.current_player == Color.WHITE else agent2
         player_name = "WHITE" if env.current_player == Color.WHITE else "BLACK"
@@ -314,7 +314,7 @@ def play_game(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
     return game_history, winner, turn_count
 
 
-def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
+def play_game_optimized(agent1, agent2, max_turns=None, game_id=0, show_board=False):
     """최적화된 게임 실행 (빠른 버전)"""
     print(f"🎮 Game {game_id + 1} 시작 (최적화된 버전)")
     
@@ -322,9 +322,12 @@ def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=Fa
     game_history = []
     turn_count = 0
     
-    print(f"   🎯 최대 턴 수: {max_turns}")
+    if max_turns is not None:
+        print(f"   🎯 최대 턴 수: {max_turns}")
+    else:
+        print(f"   🎯 최대 턴 수: 무제한 (자연 종료까지)")
     
-    while not env.is_game_over() and turn_count < max_turns:
+    while not env.is_game_over() and (max_turns is None or turn_count < max_turns):
         current_player = env.current_player
         agent = agent1 if current_player == Color.WHITE else agent2
         
@@ -370,7 +373,7 @@ def play_game_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=Fa
     return game_history, winner, turn_count
 
 
-def play_game_gpu_optimized(agent1, agent2, max_turns=1000, game_id=0, show_board=False):
+def play_game_gpu_optimized(agent1, agent2, max_turns=None, game_id=0, show_board=False):
     """GPU 최적화된 게임 실행"""
     print(f"🎮 Game {game_id + 1} 시작 (GPU 최적화 버전)")
     
@@ -378,10 +381,13 @@ def play_game_gpu_optimized(agent1, agent2, max_turns=1000, game_id=0, show_boar
     game_history = []
     turn_count = 0
     
-    print(f"   🎯 최대 턴 수: {max_turns}")
+    if max_turns is not None:
+        print(f"   🎯 최대 턴 수: {max_turns}")
+    else:
+        print(f"   🎯 최대 턴 수: 무제한 (자연 종료까지)")
     print(f"   🔧 GPU 최적화: 활성화")
     
-    while not env.is_game_over() and turn_count < max_turns:
+    while not env.is_game_over() and (max_turns is None or turn_count < max_turns):
         current_player = env.current_player
         agent = agent1 if current_player == Color.WHITE else agent2
         
@@ -579,7 +585,21 @@ def generate_training_data(game_history, winner, game_id=0):
             print(f"      ❌ Turn {i+1} 데이터 생성 실패: {e}")
             import traceback
             print(f"      상세 오류: {traceback.format_exc()}")
-            continue
+            
+            # 에러가 발생해도 기본 데이터라도 저장 시도
+            try:
+                state = move["state"] if "state" in move else np.zeros((6, 11, 11), dtype=np.float32)
+                policy = np.zeros(config.POLICY_OUTPUT_SIZE, dtype=np.float32)
+                policy[0] = 1.0  # 기본 액션
+                value = 0.0  # 기본 가치
+                
+                training_data.append({"state": state, "policy": policy, "value": value})
+                direct_policy_count += 1
+                print(f"      🔄 Turn {i+1} 기본 데이터로 복구 저장")
+                
+            except Exception as e2:
+                print(f"      💥 Turn {i+1} 완전 실패, 스킵: {e2}")
+                continue
 
     print(f"   ✅ 훈련 데이터 생성 완료: {len(training_data)}개 포지션")
     print(f"      MCTS 정책: {mcts_policy_count}개")
@@ -756,8 +776,8 @@ def main():
     # 게임 진행
     for game_id in range(args.games):
         try:
-            # 게임 진행
-            game_history, winner, turns = play_game(agent1, agent2, game_id=game_id, show_board=args.show_board)
+            # 게임 진행 (턴 수 무제한)
+            game_history, winner, turns = play_game(agent1, agent2, max_turns=None, game_id=game_id, show_board=args.show_board)
 
             # 통계 업데이트
             if winner == Color.WHITE:

@@ -1,0 +1,10 @@
+{
+  "iteration": 0,
+  "total_games_played": 0,
+  "successful_evaluations": 0,
+  "model_updates": 0,
+  "created_at": "2025-07-31T23:28:21.695500",
+  "last_evaluation_iteration": 0,
+  "best_model_iteration": 0,
+  "last_updated": "2025-07-31T23:28:21.695512"
+}

@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
+from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -23,6 +24,57 @@ from pathlib import Path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from yinsh import YinshModel, config
+
+
+def find_optimal_batch_size(model, sample_input_shape, device, max_batch_size=1024):
+    """GPU 메모리에 맞는 최적 배치 크기 찾기"""
+    model.eval()
+    optimal_batch_size = 32  # 최소값
+    
+    print("🔍 최적 배치 크기 탐색 중...")
+    
+    for batch_size in [32, 64, 128, 256, 512, 1024, 2048]:
+        if batch_size > max_batch_size:
+            break
+            
+        try:
+            # 테스트 데이터 생성
+            test_states = torch.randn(batch_size, *sample_input_shape, device=device)
+            test_policies = torch.randn(batch_size, config.POLICY_OUTPUT_SIZE, device=device)
+            test_values = torch.randn(batch_size, device=device)
+            
+            # 메모리 사용량 확인
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+                memory_before = torch.cuda.memory_allocated()
+            
+            # 순전파 테스트
+            with torch.no_grad():
+                policy_output, value_output = model(test_states)
+                
+            if device.type == 'cuda':
+                memory_after = torch.cuda.memory_allocated()
+                memory_used = (memory_after - memory_before) / 1024**2  # MB
+                
+                print(f"   배치 {batch_size}: {memory_used:.1f} MB")
+                
+            optimal_batch_size = batch_size
+            
+            # 메모리 정리
+            del test_states, test_policies, test_values, policy_output, value_output
+            if device.type == 'cuda':
+                torch.cuda.empty_cache()
+                
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                print(f"   배치 {batch_size}: 메모리 부족")
+                break
+            else:
+                raise e
+    
+    print(f"✅ 최적 배치 크기: {optimal_batch_size}")
+    model.train()
+    return optimal_batch_size
 
 
 def create_training_batch(data_folder: str, batch_size: int = 512):
@@ -60,46 +112,11 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
             saved_data = torch.load(file_path, map_location="cpu")
             print(f"   ✅ 로딩 성공, 데이터 타입: {type(saved_data)}")
             
-            # selfplay.py 형식 처리
-            if isinstance(saved_data, list):
-                print(f"   📊 selfplay.py 형식 감지: {len(saved_data)}개 게임 데이터")
-                # selfplay.py가 생성한 게임 히스토리 형식
-                for game_data in saved_data:
-                    if isinstance(game_data, dict) and "state" in game_data:
-                        state = game_data["state"]
-                        action = game_data["action"]
-                        action_info = game_data.get("action_info", {})
-                        
-                        # 상태 검증
-                        if state.shape != (15, 11, 11):
-                            continue
-                        
-                        # 정책 생성 (action_info에서 추출 또는 원핫)
-                        policy = np.zeros(4000, dtype=np.float32)
-                        if "mcts_stats" in action_info:
-                            # MCTS 통계에서 정책 추출
-                            visit_counts = action_info["mcts_stats"].get("visit_counts", {})
-                            if visit_counts:
-                                total_visits = sum(visit_counts.values())
-                                if total_visits > 0:
-                                    # 간단한 원핫 정책 생성
-                                    policy[0] = 1.0  # 임시 처리
-                        else:
-                            # 원핫 정책 생성
-                            policy[0] = 1.0  # 임시 처리
-                        
-                        # 가치 생성 (임시)
-                        value = 0.0  # 게임 결과에 따라 수정 필요
-                        
-                        all_states.append(state)
-                        all_policies.append(policy)
-                        all_values.append(value)
-            
-            # 기존 형식 처리 (하위 호환성)
-            elif isinstance(saved_data, dict) and "states" in saved_data:
-                print(f"   📊 기존 형식 감지")
+            # selfplay.py 새 형식 처리 (generate_training_data 결과)
+            if isinstance(saved_data, dict) and "states" in saved_data:
+                print(f"   📊 selfplay.py 새 형식 감지")
                 states = saved_data["states"]
-                policies = saved_data["policies"]
+                policies = saved_data["policies"] 
                 values = saved_data["values"]
                 
                 # 빈 데이터 파일 건너뛰기
@@ -107,25 +124,30 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
                     print(f"   ⚠️ 빈 데이터 파일 건너뛰기: {file_path}")
                     continue
 
-                # 데이터 검증 (AlphaZero 논문 기반)
-                for state, policy, value in zip(states, policies, values):
+                print(f"   📊 데이터 크기:")
+                print(f"      상태: {states.shape}")
+                print(f"      정책: {policies.shape}")
+                print(f"      가치: {values.shape}")
+                
+                # 데이터 검증 및 추가
+                for i, (state, policy, value) in enumerate(zip(states, policies, values)):
                     # 빈 데이터 건너뛰기
                     if state.numel() == 0 or policy.numel() == 0:
                         continue
                     
-                    # 상태 검증 (형태 확인)
-                    if len(state.shape) != 3 or state.shape[0] != 15 or state.shape[1] != 11 or state.shape[2] != 11:
-                        print(f"   ⚠️ 상태 형태 불일치: {state.shape}, 예상: (15, 11, 11)")
+                    # 상태 검증 (새 게임 규칙: 6채널)
+                    if len(state.shape) != 3 or state.shape != config.INPUT_SHAPE:
+                        print(f"   ⚠️ 상태 형태 불일치 (position {i}): {state.shape}, 예상: {config.INPUT_SHAPE}")
                         continue
                     
-                    # 정책 검증 (형태 확인)
-                    if len(policy.shape) != 1 or policy.shape[0] != 4000:
-                        print(f"   ⚠️ 정책 형태 불일치: {policy.shape}, 예상: (4000,)")
+                    # 정책 검증 (새 게임 규칙: 1848개 액션)
+                    if len(policy.shape) != 1 or policy.shape[0] != config.POLICY_OUTPUT_SIZE:
+                        print(f"   ⚠️ 정책 형태 불일치 (position {i}): {policy.shape}, 예상: ({config.POLICY_OUTPUT_SIZE},)")
                         continue
                     
                     # 가치 검증 (범위 확인)
                     if not isinstance(value, (int, float, torch.Tensor)):
-                        print(f"   ⚠️ 가치 타입 불일치: {type(value)}")
+                        print(f"   ⚠️ 가치 타입 불일치 (position {i}): {type(value)}")
                         continue
                     
                     # 텐서를 numpy로 변환
@@ -139,8 +161,12 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
                     all_states.append(state)
                     all_policies.append(policy)
                     all_values.append(value)
+                    
+                print(f"   ✅ {len(all_states)} 포지션 추가됨")
+            
             else:
                 print(f"   ⚠️ 알 수 없는 데이터 형식: {type(saved_data)}")
+                print(f"   📋 데이터 키: {list(saved_data.keys()) if isinstance(saved_data, dict) else 'N/A'}")
 
         except Exception as e:
             print(f"⚠️  Error loading {file_path}: {e}")
@@ -153,17 +179,46 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
     print(f"📊 Loaded {len(all_states)} valid training positions")
 
     # NumPy 배열로 변환
-    states = np.array(all_states, dtype=np.float32)
-    policies = np.array(all_policies, dtype=np.float32)
-    values = np.array(all_values, dtype=np.float32)
+    try:
+        states = np.array(all_states, dtype=np.float32)
+        policies = np.array(all_policies, dtype=np.float32)
+        values = np.array(all_values, dtype=np.float32)
+        
+        # NaN/Inf 검증
+        if np.any(np.isnan(states)) or np.any(np.isinf(states)):
+            print("⚠️ 상태 데이터에 NaN/Inf 값 발견, 제거 중...")
+            valid_mask = ~(np.isnan(states).any(axis=(1,2,3)) | np.isinf(states).any(axis=(1,2,3)))
+            states = states[valid_mask]
+            policies = policies[valid_mask]
+            values = values[valid_mask]
+            
+        if np.any(np.isnan(policies)) or np.any(np.isinf(policies)):
+            print("⚠️ 정책 데이터에 NaN/Inf 값 발견, 제거 중...")
+            valid_mask = ~(np.isnan(policies).any(axis=1) | np.isinf(policies).any(axis=1))
+            states = states[valid_mask]
+            policies = policies[valid_mask]
+            values = values[valid_mask]
+            
+        if np.any(np.isnan(values)) or np.any(np.isinf(values)):
+            print("⚠️ 가치 데이터에 NaN/Inf 값 발견, 제거 중...")
+            valid_mask = ~(np.isnan(values) | np.isinf(values))
+            states = states[valid_mask]
+            policies = policies[valid_mask]
+            values = values[valid_mask]
+            
+        print(f"📊 정제 후 데이터: {len(states)} positions")
+        
+    except Exception as e:
+        print(f"❌ 배열 변환 실패: {e}")
+        return None, None, None
 
     # 정책 정규화 (AlphaZero 논문 기반)
     # 각 정책의 합이 1이 되도록 정규화
     policy_sums = np.sum(policies, axis=1, keepdims=True)
     policies = policies / (policy_sums + 1e-8)  # 0으로 나누기 방지
     
-    # 로그 확률로 변환 (KL divergence용)
-    policies = np.log(policies + 1e-8)
+    # MSE 손실 사용하므로 로그 변환하지 않음
+    # policies는 그대로 확률 분포로 유지
 
     # 데이터 통계 출력
     print(f"📈 Data Statistics:")
@@ -176,24 +231,52 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
     return states, policies, values
 
 
-def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=0.002):
-    """모델 훈련 (AlphaZero 논문 기반)"""
+def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=0.002, use_mixed_precision=True):
+    """모델 훈련 (AlphaZero 논문 기반 + GPU 최적화)"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+    
+    # Mixed Precision Training 설정
+    use_amp = use_mixed_precision and device.type == 'cuda'
+    scaler = GradScaler() if use_amp else None
+    
+    print(f"🚀 GPU 최적화 설정:")
+    print(f"   Device: {device}")
+    print(f"   Mixed Precision: {use_amp}")
+    if device.type == 'cuda':
+        print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 
-    # 데이터를 텐서로 변환
-    states_tensor = torch.FloatTensor(states).to(device)
-    policies_tensor = torch.FloatTensor(policies).to(device)
-    values_tensor = torch.FloatTensor(values).to(device)
+    # 메모리 효율적 데이터 로딩을 위해 CPU에서 데이터셋 생성
+    states_tensor = torch.FloatTensor(states)
+    policies_tensor = torch.FloatTensor(policies)  
+    values_tensor = torch.FloatTensor(values)
 
     # 데이터셋 생성
     dataset = TensorDataset(states_tensor, policies_tensor, values_tensor)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+    
+    # 최적화된 DataLoader 설정
+    num_workers = min(8, torch.get_num_threads())  # CPU 코어에 맞춰 조정
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size, 
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True if device.type == 'cuda' else False,  # GPU 전송 최적화
+        persistent_workers=True,  # 워커 재사용으로 오버헤드 감소
+        prefetch_factor=2,  # 미리 가져올 배치 수
+        drop_last=True  # 마지막 불완전한 배치 제거
+    )
+    
+    print(f"📊 DataLoader 설정:")
+    print(f"   배치 크기: {batch_size}")
+    print(f"   워커 수: {num_workers}")
+    print(f"   Pin Memory: {device.type == 'cuda'}")
+    print(f"   데이터셋 크기: {len(dataset):,}")
 
     # 손실 함수 (AlphaZero 논문 기반)
-    # KL divergence for policy loss (논문: CrossEntropy 대신 KL divergence)
-    # KL divergence는 log_softmax 출력과 함께 사용
-    policy_criterion = nn.KLDivLoss(reduction='batchmean')
+    # MSE for policy loss (확률 분포 대 확률 분포)
+    # AlphaZero 논문에서는 실제로 MSE를 사용
+    policy_criterion = nn.MSELoss()
     value_criterion = nn.MSELoss()
     
     # 옵티마이저 (AlphaZero 논문 기반)
@@ -205,9 +288,10 @@ def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=
     )
     
     # 학습률 스케줄러 (AlphaZero 논문 기반)
+    # 에포크 기반으로 조정 (원래는 iteration 기반이지만 에포크로 단순화)
     scheduler = optim.lr_scheduler.StepLR(
         optimizer, 
-        step_size=400000, 
+        step_size=max(1, epochs // 3),  # 에포크의 1/3마다 감소
         gamma=0.1
     )
 
@@ -223,38 +307,63 @@ def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
 
         for batch_states, batch_policies, batch_values in progress_bar:
+            # GPU로 데이터 전송 (pin_memory 덕분에 빠름)
+            batch_states = batch_states.to(device, non_blocking=True)
+            batch_policies = batch_policies.to(device, non_blocking=True)
+            batch_values = batch_values.to(device, non_blocking=True)
+            
             optimizer.zero_grad()
 
-            # 순전파
-            policy_output, value_output = model(batch_states)
-
-            # 손실 계산 (AlphaZero 논문 기반)
-            # Policy loss: KL divergence (log_softmax output)
-            # batch_policies는 이미 log 확률로 변환되어 있음
-            policy_loss = policy_criterion(policy_output, batch_policies)
-            
-            # Value loss: MSE
-            value_loss = value_criterion(value_output.squeeze(), batch_values)
-            
-            # 가중 합계 (논문: 동일한 가중치)
-            total_batch_loss = policy_loss + value_loss
-
-            # 역전파
-            total_batch_loss.backward()
-            
-            # 그래디언트 클리핑 (AlphaZero 논문 기반)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            
-            optimizer.step()
+            # Mixed Precision Training
+            if use_amp:
+                with autocast():
+                    # 순전파
+                    policy_output, value_output = model(batch_states)
+                    
+                    # 손실 계산
+                    policy_probs = torch.softmax(policy_output, dim=1)
+                    policy_loss = policy_criterion(policy_probs, batch_policies)
+                    value_loss = value_criterion(value_output.squeeze(), batch_values)
+                    total_batch_loss = policy_loss + value_loss
+                
+                # Scaled 역전파
+                scaler.scale(total_batch_loss).backward()
+                
+                # 그래디언트 클리핑
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                # 옵티마이저 스텝
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # 일반 훈련 (FP32)
+                policy_output, value_output = model(batch_states)
+                policy_probs = torch.softmax(policy_output, dim=1)
+                policy_loss = policy_criterion(policy_probs, batch_policies)
+                value_loss = value_criterion(value_output.squeeze(), batch_values)
+                total_batch_loss = policy_loss + value_loss
+                
+                total_batch_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
 
             epoch_policy_loss += policy_loss.item()
             epoch_value_loss += value_loss.item()
+            
+            # GPU 메모리 사용량 모니터링
+            gpu_memory_info = ""
+            if device.type == 'cuda':
+                memory_used = torch.cuda.memory_allocated() / 1024**2  # MB
+                memory_cached = torch.cuda.memory_reserved() / 1024**2  # MB
+                gpu_memory_info = f"GPU: {memory_used:.0f}MB"
             
             progress_bar.set_postfix({
                 "Policy Loss": f"{policy_loss.item():.4f}",
                 "Value Loss": f"{value_loss.item():.4f}",
                 "Total Loss": f"{total_batch_loss.item():.4f}",
-                "LR": f"{optimizer.param_groups[0]['lr']:.6f}"
+                "LR": f"{optimizer.param_groups[0]['lr']:.6f}",
+                "Memory": gpu_memory_info
             })
 
         # 에포크 평균 손실
@@ -266,7 +375,18 @@ def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=
         value_losses.append(avg_value_loss)
         total_loss += avg_total_loss
         
-        print(f"📈 Epoch {epoch+1} - Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f}, Total: {avg_total_loss:.4f}")
+        # GPU 메모리 사용량 보고
+        memory_info = ""
+        if device.type == 'cuda':
+            memory_used = torch.cuda.memory_allocated() / 1024**2  # MB
+            memory_cached = torch.cuda.memory_reserved() / 1024**2  # MB
+            memory_info = f" | GPU: {memory_used:.0f}MB"
+            
+            # 에포크 종료 시 캐시 정리
+            if (epoch + 1) % 10 == 0:  # 10에포크마다
+                torch.cuda.empty_cache()
+        
+        print(f"📈 Epoch {epoch+1} - Policy: {avg_policy_loss:.4f}, Value: {avg_value_loss:.4f}, Total: {avg_total_loss:.4f}{memory_info}")
         
         # 학습률 스케줄링
         scheduler.step()
@@ -322,6 +442,8 @@ def main():
     parser.add_argument("--lr", type=float, default=0.002, help="Learning rate (AlphaZero: 0.002)")
     parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay (AlphaZero: 1e-4)")
     parser.add_argument("--momentum", type=float, default=0.9, help="Momentum (AlphaZero: 0.9)")
+    parser.add_argument("--mixed-precision", action="store_true", default=True, help="Use mixed precision training (default: True)")
+    parser.add_argument("--no-mixed-precision", dest="mixed_precision", action="store_false", help="Disable mixed precision training")
 
     args = parser.parse_args()
 
@@ -333,6 +455,7 @@ def main():
     print(f"  Learning Rate: {args.lr}")
     print(f"  Weight Decay: {args.weight_decay}")
     print(f"  Momentum: {args.momentum}")
+    print(f"  Mixed Precision: {args.mixed_precision}")
     print("=" * 60)
 
     # 출력 폴더 생성
@@ -349,8 +472,6 @@ def main():
             print(f"❌ 모델 로드 실패: {e}")
             print("🆕 새 모델을 생성합니다...")
             model = YinshModel()
-            # 모델 로드 실패는 치명적 오류이므로 종료
-            sys.exit(1)
     else:
         print("🆕 Creating new model (AlphaZero 논문 기반)")
         model = YinshModel()
@@ -361,6 +482,19 @@ def main():
     print(f"📊 Model Statistics:")
     print(f"  Total Parameters: {total_params:,}")
     print(f"  Trainable Parameters: {trainable_params:,}")
+    
+    # GPU 최적화: 동적 배치 크기 조정
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == 'cuda' and args.batch_size > 32:
+        optimal_batch_size = find_optimal_batch_size(
+            model, 
+            config.INPUT_SHAPE, 
+            device, 
+            max_batch_size=args.batch_size
+        )
+        if optimal_batch_size != args.batch_size:
+            print(f"🔧 배치 크기 조정: {args.batch_size} → {optimal_batch_size}")
+            args.batch_size = optimal_batch_size
 
     # 훈련 데이터 로드
     print(f"\n📂 Loading training data from: {args.data}")
@@ -385,6 +519,7 @@ def main():
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
+        use_mixed_precision=args.mixed_precision,
     )
 
     # 모델 저장
