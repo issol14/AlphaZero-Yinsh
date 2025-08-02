@@ -73,7 +73,7 @@ app = FastAPI(
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://df978b75027c.ngrok-free.app"],
+    allow_origins=["https://df978b75027c.ngrok-free.app", "https://yinsh.io", "yinsh.io", "demo.yinsh.io", "https://demo.yinsh.io"],
     # allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],

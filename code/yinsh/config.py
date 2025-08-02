@@ -85,9 +85,9 @@ NUM_WORKERS = 4  # 데이터 로더 워커 수
 PIN_MEMORY = True  # CUDA 메모리 핀닝
 
 # ==== 셀플레이 설정 ====
-SELFPLAY_TEMPERATURE = 1.0  # 셀플레이 온도
-SELFPLAY_NOISE_ALPHA = 0.3  # Dirichlet 노이즈 알파
-SELFPLAY_NOISE_EPSILON = 0.25  # Dirichlet 노이즈 엡실론
+SELFPLAY_TEMPERATURE = 2.0  # 셀플레이 온도 (휴리스틱 강화)
+SELFPLAY_NOISE_ALPHA = 0.05  # Dirichlet 노이즈 알파 (매우 강한 탐색)
+SELFPLAY_NOISE_EPSILON = 0.7  # Dirichlet 노이즈 엡실론 (70% 노이즈)
 
 # ==== 평가 설정 ====
 EVALUATION_TEMPERATURE = 0.1  # 평가 시 온도 (논문과 동일)

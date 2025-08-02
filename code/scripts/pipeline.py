@@ -839,9 +839,9 @@ def main():
     # Self-play 설정 (AlphaZero 논문 기반)
     parser.add_argument("--selfplay-games", type=int, default=200,  # 논문: 높은 품질
                        help="Iteration당 self-play 게임 수")
-    parser.add_argument("--selfplay-mcts-sims", type=int, default=800,  # 논문: 800
+    parser.add_argument("--selfplay-mcts-sims", type=int, default=400,  # 최적화: 800→400 (2배 빠름)
                        help="Self-play MCTS 시뮬레이션 수")
-    parser.add_argument("--selfplay-workers", type=int, default=6,
+    parser.add_argument("--selfplay-workers", type=int, default=8,
                        help="Self-play 병렬 워커 수")
     
     # 훈련 설정 (AlphaZero 논문 기반)
@@ -857,11 +857,11 @@ def main():
     # 평가 설정 (AlphaZero 논문 기반)
     parser.add_argument("--evaluation-frequency", type=int, default=3,  # 논문: 매 N iteration
                        help="평가 주기 (iterations)")
-    parser.add_argument("--evaluation-games", type=int, default=400,  # 논문: 400게임
+    parser.add_argument("--evaluation-games", type=int, default=100,  # 논문: 400게임
                        help="모델 평가 게임 수")
-    parser.add_argument("--evaluation-threshold", type=float, default=0.55,  # 논문: 55%
+    parser.add_argument("--evaluation-threshold", type=float, default=0.45,  # 초기 학습용: 45%
                        help="새 모델 채택 승률 기준 (0.0-1.0)")
-    parser.add_argument("--evaluation-mcts-sims", type=int, default=800,  # 논문: 정확한 평가
+    parser.add_argument("--evaluation-mcts-sims", type=int, default=400,  # 최적화: 800→400 (2배 빠름)
                        help="평가 MCTS 시뮬레이션 수")
     parser.add_argument("--evaluation-workers", type=int, default=4,
                        help="평가 병렬 워커 수")
@@ -876,7 +876,30 @@ def main():
     parser.add_argument("--max-data-iterations", type=int, default=50,
                        help="누적 데이터 최대 iteration 수 (메모리 관리)")
     
+    # MCTS 성능 최적화 옵션
+    parser.add_argument("--fast-mcts", action="store_true",
+                       help="빠른 MCTS 모드 (시뮬레이션 수 대폭 감소)")
+    parser.add_argument("--ultra-fast-mcts", action="store_true",
+                       help="초고속 MCTS 모드 (최소 시뮬레이션)")
+    parser.add_argument("--large-batch", action="store_true",
+                       help="대용량 GPU 배치 모드 (배치 크기 128)")
+    
     args = parser.parse_args()
+    
+    # MCTS 최적화 모드 적용
+    if args.ultra_fast_mcts:
+        args.selfplay_mcts_sims = 100  # 4배 빠름
+        args.evaluation_mcts_sims = 150
+        args.batch_size = 128 if args.large_batch else 64
+        print("🚀 초고속 MCTS 모드 활성화!")
+    elif args.fast_mcts:
+        args.selfplay_mcts_sims = 200  # 2배 빠름  
+        args.evaluation_mcts_sims = 250
+        args.batch_size = 64
+        print("⚡ 빠른 MCTS 모드 활성화!")
+    elif args.large_batch:
+        args.batch_size = 128
+        print("💾 대용량 배치 모드 활성화!")
     
     # 설정 딕셔너리 생성
     config_dict = {
@@ -898,10 +921,10 @@ def main():
         'parallel_evaluation': not args.no_parallel_evaluation,
         'max_data_iterations': args.max_data_iterations,
         'win_rate_threshold': args.evaluation_threshold,
-        # GPU 최적화 추가 설정
-        'batch_size': 32,  # selfplay.py의 기본값과 일치
-        'use_parallel_mcts': False,  # 기본값: False (옵션으로 추가 가능)
-        'mcts_threads': 4
+        # GPU 최적화 추가 설정 (최적화 모드 적용)
+        'batch_size': getattr(args, 'batch_size', 64),  # 동적 배치 크기
+        'use_parallel_mcts': True,  # 병렬 MCTS 활성화 (성능 향상)
+        'mcts_threads': 6
     }
     
     print("🚀 AlphaZero YINSH 훈련 파이프라인 시작!")

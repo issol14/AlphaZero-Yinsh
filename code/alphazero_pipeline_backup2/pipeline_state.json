@@ -1,10 +1,10 @@
 {
-  "iteration": 9,
-  "total_games_played": 1800,
+  "iteration": 6,
+  "total_games_played": 1200,
   "successful_evaluations": 0,
   "model_updates": 0,
   "start_time": 1754014216.3292544,
   "last_evaluation_iteration": 6,
   "best_model_iteration": 0,
-  "last_updated": "2025-08-02T02:37:23.166345"
+  "last_updated": "2025-08-01T18:41:39.446251"
 }

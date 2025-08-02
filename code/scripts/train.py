@@ -234,7 +234,7 @@ def create_training_batch(data_folder: str, batch_size: int = 512):
 def train_model(model, states, policies, values, epochs=100, batch_size=512, lr=0.002, use_mixed_precision=True):
     """모델 훈련 (AlphaZero 논문 기반 + GPU 최적화)"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
+    # 모델은 이미 main()에서 GPU로 이동됨
     
     # Mixed Precision Training 설정
     use_amp = use_mixed_precision and device.type == 'cuda'
@@ -466,7 +466,7 @@ def main():
         print(f"📥 Loading existing model: {args.model}")
         try:
             # AlphaZero 논문 방식: 저장된 모델을 직접 로드
-            model = torch.load(args.model, map_location='cpu')
+            model = torch.load(args.model, map_location='cpu', weights_only=False)
             print(f"✅ 모델 로드 성공: {args.model}")
         except Exception as e:
             print(f"❌ 모델 로드 실패: {e}")
@@ -485,6 +485,11 @@ def main():
     
     # GPU 최적화: 동적 배치 크기 조정
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # 모델을 GPU로 이동 (배치 크기 최적화 전에 필요)
+    model = model.to(device)
+    print(f"📱 모델이 {device}로 이동되었습니다")
+    
     if device.type == 'cuda' and args.batch_size > 32:
         optimal_batch_size = find_optimal_batch_size(
             model, 
